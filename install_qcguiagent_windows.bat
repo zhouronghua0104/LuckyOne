@@ -2,7 +2,7 @@
 setlocal EnableExtensions EnableDelayedExpansion
 
 rem install_qcguiagent_windows.bat
-rem Windows batch script to provision device models, runtime libs, and app via ADB.
+rem Windows batch script to provision device models, runtime libs, ASR/TTS assets, and app via ADB.
 rem 
 rem Usage:
 rem   install_qcguiagent_windows.bat [--apk C:\path\to\app.apk] [--serial SERIAL] ^
@@ -14,6 +14,7 @@ rem 1) adb root && adb remount
 rem 2) Ensure model ark_000007_20250811_8850 exists on device (push if missing)
 rem 4) Ensure model ark_000008_20250725_8850 exists on device (push if missing)
 rem 5) Install runtime libs .\BibaoLibs\lib -> /vendor/app/qcguiagent/lib
+rem 5.5) Install ASR/TTS assets -> /vendor/etc
 rem 6) Uninstall old app, remove old apk(s), push new apk
 rem 7) Reboot and wait for boot
 rem 9) adb root; setenforce 0
@@ -21,11 +22,13 @@ rem
 rem Additionally:
 rem - If local model or libs directories are missing, they will be downloaded from predefined URLs and unzipped.
 rem - If APK is not provided or missing locally, it will be downloaded and unzipped automatically.
+rem - If ASR assets directory is missing, it will be downloaded and unzipped automatically.
 
 set "EXPECTED_MODEL7_NAME=ark_000007_20250811_8850"
 set "EXPECTED_MODEL8_NAME=ark_000008_20250725_8850"
 set "DEVICE_MODEL_DIR=/data/local/qcguiagent"
 set "DEVICE_VENDOR_DIR=/vendor/app/qcguiagent"
+set "DEVICE_VENDOR_ETC_DIR=/vendor/etc"
 set "PACKAGE_NAME=com.modelbest.qcguiagent"
 
 rem Download URLs
@@ -33,12 +36,14 @@ set "MODEL7_ZIP_URL=https://minicpm.oss-cn-beijing.aliyuncs.com/qualcomm/ark_000
 set "MODEL8_ZIP_URL=https://minicpm.oss-cn-beijing.aliyuncs.com/qualcomm/ark_000008_20250725_8850.zip"
 set "LIBS_ZIP_URL=https://minicpm.oss-cn-beijing.aliyuncs.com/qualcomm/opencl/lib.zip"
 set "APK_ZIP_URL=https://minicpm.oss-cn-beijing.aliyuncs.com/qualcomm/opencl/QcBibao-release-latest.apk.zip"
+set "ASR_ZIP_URL=https://minicpm.oss-cn-beijing.aliyuncs.com/qualcomm/8850_tts_asr.zip"
 set "DEFAULT_APK_NAME=QcBibao-release-latest.apk"
 
 rem Defaults (can be overridden by CLI)
 set "LOCAL_MODEL7=.\%EXPECTED_MODEL7_NAME%"
 set "LOCAL_MODEL8=.\%EXPECTED_MODEL8_NAME%"
 set "LOCAL_LIBS_DIR=.\BibaoLibs\lib"
+set "LOCAL_ASR_DIR=.\8850_tts_asr"
 set "APK_PATH="
 set "SERIAL="
 
@@ -60,7 +65,7 @@ goto :usage
 if defined APK_PATH goto :validate
 :usage
   echo.
-  echo install_qcguiagent_windows.bat - Provision device models, libs and app via ADB
+  echo install_qcguiagent_windows.bat - Provision device models, libs, ASR/TTS assets and app via ADB
   echo.
   echo Options:
   echo   --apk PATH                 Path to the APK file. If omitted or missing, the script will download it.
@@ -69,7 +74,7 @@ if defined APK_PATH goto :validate
   echo   --model8 PATH              Local path to %EXPECTED_MODEL8_NAME% ^(default: %LOCAL_MODEL8%^
   echo   --libs PATH                Local path to BibaoLibs\lib ^(default: %LOCAL_LIBS_DIR%^
   echo Notes:
-  echo   - Missing model or libs directories will be downloaded and unzipped automatically.
+  echo   - Missing model, libs or ASR directories will be downloaded and unzipped automatically.
   echo   - Missing APK will be downloaded and extracted as %DEFAULT_APK_NAME% in the current directory.
   echo Examples:
   echo   install_qcguiagent_windows.bat --apk .\qcguiagent-release.apk
@@ -91,6 +96,7 @@ call :ensure_root_and_remount
 call :install_model_if_missing "%LOCAL_MODEL7%" "%EXPECTED_MODEL7_NAME%" || goto :fail
 call :install_model_if_missing "%LOCAL_MODEL8%" "%EXPECTED_MODEL8_NAME%" || goto :fail
 call :install_runtime_libs "%LOCAL_LIBS_DIR%" || goto :fail
+call :install_asr_tts || goto :fail
 call :install_app_apk "%APK_PATH%" || goto :fail
 
 echo [INFO] Rebooting device
@@ -176,6 +182,25 @@ exit /b 0
   %ADB% shell "chmod -R 777 '%DEVICE_VENDOR_DIR%/lib'" >nul 2>&1
   exit /b 0
 
+:install_asr_tts
+  if not exist "%LOCAL_ASR_DIR%" (
+    echo [ERROR] Local ASR assets directory not found: %LOCAL_ASR_DIR%
+    exit /b 1
+  )
+  echo [INFO] Ensuring %DEVICE_VENDOR_ETC_DIR% exists
+  %ADB% shell "mkdir -p '%DEVICE_VENDOR_ETC_DIR%'"
+  call :device_path_exists "%DEVICE_VENDOR_ETC_DIR%/asr"
+  if "%_DPE_EXISTS%"=="1" (
+    echo [INFO] ASR assets already present on device: %DEVICE_VENDOR_ETC_DIR%/asr
+  ) else (
+    echo [INFO] Installing ASR/TTS assets to %DEVICE_VENDOR_ETC_DIR%
+    %ADB% push "%LOCAL_ASR_DIR%/." "%DEVICE_VENDOR_ETC_DIR%" | cmd /c more
+  )
+  echo [INFO] Setting permissions for ASR/TTS assets
+  %ADB% shell "chmod -R 777 '%DEVICE_VENDOR_ETC_DIR%/whisper'" >nul 2>&1
+  %ADB% shell "chmod -R 777 '%DEVICE_VENDOR_ETC_DIR%/tts'" >nul 2>&1
+  exit /b 0
+
 :install_app_apk
   set "_APK=%~1"
   echo [INFO] Uninstalling old app: %PACKAGE_NAME% (ignore errors if not installed)
@@ -249,6 +274,18 @@ exit /b 0
     )
   ) else (
     echo [INFO] Local libs exist: %LOCAL_LIBS_DIR%
+  )
+
+  rem ASR assets
+  if not exist "%LOCAL_ASR_DIR%" (
+    echo [INFO] Local ASR assets missing: %LOCAL_ASR_DIR%. Downloading...
+    call :download_and_unzip "%ASR_ZIP_URL%" "." || exit /b 1
+    if not exist "%LOCAL_ASR_DIR%" (
+      echo [ERROR] After download, directory still missing: %LOCAL_ASR_DIR%
+      exit /b 1
+    )
+  ) else (
+    echo [INFO] Local ASR assets exist: %LOCAL_ASR_DIR%
   )
 
   rem APK

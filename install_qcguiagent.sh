@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # install_qcguiagent.sh
-# macOS-compatible Bash script to provision device models, runtime libs, and app via ADB.
+# macOS-compatible Bash script to provision device models, runtime libs, ASR/TTS assets, and app via ADB.
 #
 # Usage:
 #   ./install_qcguiagent.sh [--apk /path/to/app.apk] [--serial SERIAL] \
@@ -14,6 +14,7 @@ set -euo pipefail
 # 2) Check and install model ark_000007_20250811_8850 if missing
 # 4) Check and install model ark_000008_20250725_8850 if missing
 # 5) Install runtime libs BibaoLibs/lib -> /vendor/app/qcguiagent/lib
+# 5.5) Install ASR/TTS assets -> /vendor/etc
 # 6) Uninstall old app, remove old apk(s), push new apk
 # 7) Reboot
 # 8) Wait for reboot completion
@@ -22,6 +23,7 @@ set -euo pipefail
 # Additionally:
 # - If local model or libs directories are missing, they will be downloaded from predefined URLs and unzipped.
 # - If APK is not provided or missing locally, it will be downloaded and unzipped automatically.
+# - If ASR assets directory is missing, it will be downloaded and unzipped automatically.
 
 SCRIPT_NAME=$(basename "$0")
 
@@ -29,6 +31,7 @@ EXPECTED_MODEL7_NAME="ark_000007_20250811_8850"
 EXPECTED_MODEL8_NAME="ark_000008_20250725_8850"
 DEVICE_MODEL_DIR="/data/local/qcguiagent"
 DEVICE_VENDOR_DIR="/vendor/app/qcguiagent"
+DEVICE_VENDOR_ETC_DIR="/vendor/etc"
 PACKAGE_NAME="com.modelbest.qcguiagent"
 
 # Download URLs
@@ -36,18 +39,20 @@ MODEL7_ZIP_URL="https://minicpm.oss-cn-beijing.aliyuncs.com/qualcomm/ark_000007_
 MODEL8_ZIP_URL="https://minicpm.oss-cn-beijing.aliyuncs.com/qualcomm/ark_000008_20250725_8850.zip"
 LIBS_ZIP_URL="https://minicpm.oss-cn-beijing.aliyuncs.com/qualcomm/opencl/lib.zip"
 APK_ZIP_URL="https://minicpm.oss-cn-beijing.aliyuncs.com/qualcomm/opencl/QcBibao-release-latest.apk.zip"
+ASR_ZIP_URL="https://minicpm.oss-cn-beijing.aliyuncs.com/qualcomm/8850_tts_asr.zip"
 DEFAULT_APK_NAME="QcBibao-release-latest.apk"
 
 # Defaults (can be overridden by CLI)
 LOCAL_MODEL7="./${EXPECTED_MODEL7_NAME}"
 LOCAL_MODEL8="./${EXPECTED_MODEL8_NAME}"
 LOCAL_LIBS_DIR="./BibaoLibs/lib"
+LOCAL_ASR_DIR="./8850_tts_asr"
 APK_PATH=""
 SERIAL=""
 
 print_usage() {
   cat <<EOF
-${SCRIPT_NAME} - Provision device models, libs and app via ADB
+${SCRIPT_NAME} - Provision device models, libs, ASR/TTS assets and app via ADB
 
 Options:
   --apk PATH                 Path to the APK file. If omitted or missing, the script will download it.
@@ -58,7 +63,7 @@ Options:
   -h, --help                 Show this help and exit
 
 Notes:
-  - Missing model or libs directories will be downloaded and unzipped automatically.
+  - Missing model, libs or ASR directories will be downloaded and unzipped automatically.
   - Missing APK will be downloaded from ${APK_ZIP_URL} and extracted as ${DEFAULT_APK_NAME} in the current directory.
 
 Examples:
@@ -205,6 +210,19 @@ ensure_local_assets() {
     log "Local libs exist: ${LOCAL_LIBS_DIR}"
   fi
 
+  # Ensure ASR assets directory exists
+  if [[ ! -d "${LOCAL_ASR_DIR}" ]]; then
+    log "ASR assets missing: ${LOCAL_ASR_DIR}. Downloading..."
+    local tmpzip
+    tmpzip=$(mktemp -t asr.XXXXXX.zip)
+    download_file "${ASR_ZIP_URL}" "${tmpzip}"
+    unzip_to_dir "${tmpzip}" "."
+    rm -f "${tmpzip}"
+    [[ -d "${LOCAL_ASR_DIR}" ]] || fail "After download, directory still missing: ${LOCAL_ASR_DIR}"
+  else
+    log "ASR assets exist: ${LOCAL_ASR_DIR}"
+  fi
+
   # Ensure APK exists (download if missing or not provided)
   if [[ -z "${APK_PATH}" || ! -f "${APK_PATH}" ]]; then
     log "APK missing or not provided. Downloading from ${APK_ZIP_URL}..."
@@ -285,6 +303,26 @@ install_runtime_libs() {
   adb_run shell "chmod -R 777 '${DEVICE_VENDOR_DIR}/lib'" || warn "chmod on libs failed"
 }
 
+# Install ASR/TTS assets under /vendor/etc
+install_asr_tts() {
+  local local_asr_dir="${LOCAL_ASR_DIR}"
+  [[ -d "${local_asr_dir}" ]] || fail "Local ASR assets directory not found: ${local_asr_dir}"
+
+  adb_run shell "mkdir -p '${DEVICE_VENDOR_ETC_DIR}'"
+
+  if device_path_exists "${DEVICE_VENDOR_ETC_DIR}/asr"; then
+    log "ASR assets already present on device: ${DEVICE_VENDOR_ETC_DIR}/asr"
+  else
+    log "Installing ASR/TTS assets to ${DEVICE_VENDOR_ETC_DIR}"
+    # Push contents of local_asr_dir (not the directory itself)
+    adb_run push "${local_asr_dir}/." "${DEVICE_VENDOR_ETC_DIR}" | cat
+  fi
+
+  # Permission adjustments
+  adb_run shell "chmod -R 777 '${DEVICE_VENDOR_ETC_DIR}/whisper'" || warn "chmod whisper failed"
+  adb_run shell "chmod -R 777 '${DEVICE_VENDOR_ETC_DIR}/tts'" || warn "chmod tts failed"
+}
+
 # Uninstall and push APK
 install_app_apk() {
   local apk_path="$1"
@@ -323,6 +361,9 @@ main() {
 
   log "Step 5: Install runtime libs"
   install_runtime_libs "${LOCAL_LIBS_DIR}"
+
+  log "Step 5.5: Install ASR/TTS assets"
+  install_asr_tts
 
   log "Step 6: Install app APK"
   install_app_apk "${APK_PATH}"
