@@ -243,6 +243,12 @@ exit /b 0
     call :get_parent_dir "%LOCAL_MODEL7%" _PARENT7
     call :download_and_unzip "%MODEL7_ZIP_URL%" "%_PARENT7%" || exit /b 1
     if not exist "%LOCAL_MODEL7%" (
+      rem Attempt to locate extracted directory by name
+      for /d /r "%_PARENT7%" %%D in (*) do (
+        if /I "%%~nxD"=="%EXPECTED_MODEL7_NAME%" set "LOCAL_MODEL7=%%~fD"
+      )
+    )
+    if not exist "%LOCAL_MODEL7%" (
       echo [ERROR] After download, directory still missing: %LOCAL_MODEL7%
       exit /b 1
     )
@@ -255,6 +261,11 @@ exit /b 0
     echo [INFO] Local model missing: %LOCAL_MODEL8%. Downloading...
     call :get_parent_dir "%LOCAL_MODEL8%" _PARENT8
     call :download_and_unzip "%MODEL8_ZIP_URL%" "%_PARENT8%" || exit /b 1
+    if not exist "%LOCAL_MODEL8%" (
+      for /d /r "%_PARENT8%" %%D in (*) do (
+        if /I "%%~nxD"=="%EXPECTED_MODEL8_NAME%" set "LOCAL_MODEL8=%%~fD"
+      )
+    )
     if not exist "%LOCAL_MODEL8%" (
       echo [ERROR] After download, directory still missing: %LOCAL_MODEL8%
       exit /b 1
@@ -269,6 +280,11 @@ exit /b 0
     call :get_parent_dir "%LOCAL_LIBS_DIR%" _PARENTLIB
     call :download_and_unzip "%LIBS_ZIP_URL%" "%_PARENTLIB%" || exit /b 1
     if not exist "%LOCAL_LIBS_DIR%" (
+      for /d /r "%_PARENTLIB%" %%D in (*) do (
+        if /I "%%~nxD"=="lib" set "LOCAL_LIBS_DIR=%%~fD"
+      )
+    )
+    if not exist "%LOCAL_LIBS_DIR%" (
       echo [ERROR] After download, directory still missing: %LOCAL_LIBS_DIR%
       exit /b 1
     )
@@ -280,6 +296,11 @@ exit /b 0
   if not exist "%LOCAL_ASR_DIR%" (
     echo [INFO] Local ASR assets missing: %LOCAL_ASR_DIR%. Downloading...
     call :download_and_unzip "%ASR_ZIP_URL%" "." || exit /b 1
+    if not exist "%LOCAL_ASR_DIR%" (
+      for /d /r "." %%D in (*) do (
+        if /I "%%~nxD"=="8850_tts_asr" set "LOCAL_ASR_DIR=%%~fD"
+      )
+    )
     if not exist "%LOCAL_ASR_DIR%" (
       echo [ERROR] After download, directory still missing: %LOCAL_ASR_DIR%
       exit /b 1
@@ -330,12 +351,27 @@ exit /b 0
   echo [INFO] Downloading: %_URL%
   powershell -NoProfile -Command "try { Invoke-WebRequest -UseBasicParsing -Uri '%_URL%' -OutFile '%_TMPZIP%' -ErrorAction Stop } catch { exit 1 }"
   if errorlevel 1 (
+    where curl >nul 2>&1 && (curl -L -o "%_TMPZIP%" "%_URL%")
+  )
+  if not exist "%_TMPZIP%" (
+    rem Fallback to certutil if still missing
+    where certutil >nul 2>&1 && (certutil -urlcache -split -f "%_URL%" "%_TMPZIP%" >nul 2>&1)
+  )
+  if not exist "%_TMPZIP%" (
     echo [ERROR] Download failed: %_URL%
-    if exist "%_TMPZIP%" del /f /q "%_TMPZIP%" >nul 2>&1
     exit /b 1
   )
+
   echo [INFO] Extracting to: %_DEST_DIR%
   powershell -NoProfile -Command "try { Expand-Archive -Force -Path '%_TMPZIP%' -DestinationPath '%_DEST_DIR%' -ErrorAction Stop } catch { exit 1 }"
+  if errorlevel 1 (
+    rem Fallback to .NET ZipFile extraction
+    powershell -NoProfile -Command "try { Add-Type -AssemblyName System.IO.Compression.FileSystem; [System.IO.Compression.ZipFile]::ExtractToDirectory('%_TMPZIP%', '%_DEST_DIR%'); } catch { exit 1 }"
+  )
+  if errorlevel 1 (
+    rem Fallback to tar if available
+    where tar >nul 2>&1 && (tar -xf "%_TMPZIP%" -C "%_DEST_DIR%")
+  )
   if errorlevel 1 (
     echo [ERROR] Extract failed to: %_DEST_DIR%
     if exist "%_TMPZIP%" del /f /q "%_TMPZIP%" >nul 2>&1
