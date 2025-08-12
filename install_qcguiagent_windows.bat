@@ -139,12 +139,8 @@ exit /b 0
     exit /b 1
   )
   for %%F in ("%_LOCAL_PATH%") do set "_LOCAL_NAME=%%~nxF"
-  echo [INFO] Pushing "%_LOCAL_PATH%" to "%_DEVICE_PARENT%"
-  %ADB% push "%_LOCAL_PATH%" "%_DEVICE_PARENT%" | cmd /c more
-  if /I not "%_LOCAL_NAME%"=="%_EXPECTED_NAME%" (
-    echo [INFO] Renaming on device: %_LOCAL_NAME% -^> %_EXPECTED_NAME%
-    %ADB% shell "mv -f '%_DEVICE_PARENT%/%_LOCAL_NAME%' '%_DEVICE_PARENT%/%_EXPECTED_NAME%'"
-  )
+  echo [INFO] Pushing "%_LOCAL_PATH%" to "%_DEVICE_PARENT%/%_EXPECTED_NAME%"
+  %ADB% push "%_LOCAL_PATH%" "%_DEVICE_PARENT%/%_EXPECTED_NAME%" | cmd /c more
   exit /b 0
 
 :install_model_if_missing

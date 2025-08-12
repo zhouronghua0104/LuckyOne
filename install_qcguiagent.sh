@@ -258,13 +258,8 @@ push_to_device_as_name() {
 
   [[ -e "${local_path}" ]] || fail "Local path does not exist: ${local_path}"
 
-  log "Pushing '${local_path}' to '${device_parent}'..."
-  adb_run push "${local_path}" "${device_parent}" | cat
-
-  if [[ "${local_name}" != "${expected_name}" ]]; then
-    log "Renaming on device: ${local_name} -> ${expected_name}"
-    adb_run shell "mv -f '${device_parent}/${local_name}' '${device_parent}/${expected_name}'"
-  fi
+  log "Pushing '${local_path}' to '${device_parent}/${expected_name}'..."
+  adb_run push "${local_path}" "${device_parent}/${expected_name}" | cat
 }
 
 # Install a model if missing at the device path
