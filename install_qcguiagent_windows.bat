@@ -263,7 +263,7 @@ exit /b 0
     if exist ".\%DEFAULT_APK_NAME%" (
       set "APK_PATH=.\%DEFAULT_APK_NAME%"
     ) else (
-      for /f "delims=" %%F in ('dir /b /o:-d *.apk 2^>nul') do (
+      for /r "." %%F in (*.apk) do (
         if not defined APK_PATH set "APK_PATH=%%F"
       )
     )

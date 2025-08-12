@@ -218,8 +218,8 @@ ensure_local_assets() {
       if [[ -f "./${DEFAULT_APK_NAME}" ]]; then
         APK_PATH="./${DEFAULT_APK_NAME}"
       else
-        # Fallback: pick the newest .apk in current dir
-        APK_PATH=$(ls -1t ./*.apk 2>/dev/null | head -n1 || true)
+        # Fallback: find any .apk recursively
+        APK_PATH=$(find . -type f -name "*.apk" 2>/dev/null | head -n1 || true)
       fi
     fi
     [[ -n "${APK_PATH}" && -f "${APK_PATH}" ]] || fail "After download, APK not found. Expected ./${DEFAULT_APK_NAME}"
