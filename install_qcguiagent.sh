@@ -5,7 +5,7 @@ set -euo pipefail
 # macOS-compatible Bash script to provision device models, runtime libs, and app via ADB.
 #
 # Usage:
-#   ./install_qcguiagent.sh --apk /path/to/app.apk [--serial SERIAL] \
+#   ./install_qcguiagent.sh [--apk /path/to/app.apk] [--serial SERIAL] \
 #       [--model7 ./ark_000007_20250811_8850] [--model8 ./ark_000008_20250725_8850] \
 #       [--libs ./BibaoLibs/lib]
 #
@@ -21,6 +21,7 @@ set -euo pipefail
 #
 # Additionally:
 # - If local model or libs directories are missing, they will be downloaded from predefined URLs and unzipped.
+# - If APK is not provided or missing locally, it will be downloaded and unzipped automatically.
 
 SCRIPT_NAME=$(basename "$0")
 
@@ -34,6 +35,8 @@ PACKAGE_NAME="com.modelbest.qcguiagent"
 MODEL7_ZIP_URL="https://minicpm.oss-cn-beijing.aliyuncs.com/qualcomm/ark_000007_20250811_8850.zip"
 MODEL8_ZIP_URL="https://minicpm.oss-cn-beijing.aliyuncs.com/qualcomm/ark_000008_20250725_8850.zip"
 LIBS_ZIP_URL="https://minicpm.oss-cn-beijing.aliyuncs.com/qualcomm/opencl/lib.zip"
+APK_ZIP_URL="https://minicpm.oss-cn-beijing.aliyuncs.com/qualcomm/opencl/QcBibao-release-latest.apk.zip"
+DEFAULT_APK_NAME="QcBibao-release-latest.apk"
 
 # Defaults (can be overridden by CLI)
 LOCAL_MODEL7="./${EXPECTED_MODEL7_NAME}"
@@ -46,10 +49,8 @@ print_usage() {
   cat <<EOF
 ${SCRIPT_NAME} - Provision device models, libs and app via ADB
 
-Required:
-  --apk PATH                 Path to the APK file to push to ${DEVICE_VENDOR_DIR}
-
-Optional:
+Options:
+  --apk PATH                 Path to the APK file. If omitted or missing, the script will download it.
   --serial SERIAL            Target device serial (when multiple devices connected)
   --model7 PATH              Local path to ${EXPECTED_MODEL7_NAME} (default: ${LOCAL_MODEL7})
   --model8 PATH              Local path to ${EXPECTED_MODEL8_NAME} (default: ${LOCAL_MODEL8})
@@ -57,12 +58,12 @@ Optional:
   -h, --help                 Show this help and exit
 
 Notes:
-  - If the specified model or libs directories do not exist locally, the script will download
-    the corresponding ZIPs and unzip them into the appropriate parent directories automatically.
+  - Missing model or libs directories will be downloaded and unzipped automatically.
+  - Missing APK will be downloaded from ${APK_ZIP_URL} and extracted as ${DEFAULT_APK_NAME} in the current directory.
 
 Examples:
   ${SCRIPT_NAME} --apk ./qcguiagent-release.apk
-  ${SCRIPT_NAME} --apk ./qcguiagent.apk --serial ABC123 --model7 ./${EXPECTED_MODEL7_NAME} --model8 ./${EXPECTED_MODEL8_NAME} --libs ./BibaoLibs/lib
+  ${SCRIPT_NAME} --serial ABC123
 EOF
 }
 
@@ -83,10 +84,8 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# Validate inputs
+# Validate required tools
 command -v adb >/dev/null 2>&1 || fail "adb not found in PATH. Please install Android platform-tools."
-[[ -n "${APK_PATH}" ]] || { print_usage; fail "--apk is required"; }
-[[ -f "${APK_PATH}" ]] || fail "APK not found: ${APK_PATH}"
 
 # Helper to run adb with optional serial
 adb_run() {
@@ -205,6 +204,28 @@ ensure_local_assets() {
   else
     log "Local libs exist: ${LOCAL_LIBS_DIR}"
   fi
+
+  # Ensure APK exists (download if missing or not provided)
+  if [[ -z "${APK_PATH}" || ! -f "${APK_PATH}" ]]; then
+    log "APK missing or not provided. Downloading from ${APK_ZIP_URL}..."
+    local tmpzip
+    tmpzip=$(mktemp -t apk.XXXXXX.zip)
+    download_file "${APK_ZIP_URL}" "${tmpzip}"
+    unzip_to_dir "${tmpzip}" "."
+    rm -f "${tmpzip}"
+    # Set APK_PATH if still empty or not found
+    if [[ -z "${APK_PATH}" ]]; then
+      if [[ -f "./${DEFAULT_APK_NAME}" ]]; then
+        APK_PATH="./${DEFAULT_APK_NAME}"
+      else
+        # Fallback: pick the newest .apk in current dir
+        APK_PATH=$(ls -1t ./*.apk 2>/dev/null | head -n1 || true)
+      fi
+    fi
+    [[ -n "${APK_PATH}" && -f "${APK_PATH}" ]] || fail "After download, APK not found. Expected ./${DEFAULT_APK_NAME}"
+  else
+    log "Local APK exists: ${APK_PATH}"
+  fi
 }
 
 # ------------------------------------------------------------
@@ -288,7 +309,7 @@ main() {
     warn "Multiple devices detected. Consider using --serial to target a specific device. Proceeding with default.";
   fi
 
-  log "Pre-download: Ensuring local models and libs exist"
+  log "Pre-download: Ensuring local models, libs and APK exist"
   ensure_local_assets
 
   log "Step 1: Acquire root and remount"

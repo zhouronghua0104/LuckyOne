@@ -5,7 +5,7 @@ rem install_qcguiagent_windows.bat
 rem Windows batch script to provision device models, runtime libs, and app via ADB.
 rem 
 rem Usage:
-rem   install_qcguiagent_windows.bat --apk C:\path\to\app.apk [--serial SERIAL] ^
+rem   install_qcguiagent_windows.bat [--apk C:\path\to\app.apk] [--serial SERIAL] ^
 rem       [--model7 .\ark_000007_20250811_8850] [--model8 .\ark_000008_20250725_8850] ^
 rem       [--libs .\BibaoLibs\lib]
 rem
@@ -20,6 +20,7 @@ rem 9) adb root; setenforce 0
 rem
 rem Additionally:
 rem - If local model or libs directories are missing, they will be downloaded from predefined URLs and unzipped.
+rem - If APK is not provided or missing locally, it will be downloaded and unzipped automatically.
 
 set "EXPECTED_MODEL7_NAME=ark_000007_20250811_8850"
 set "EXPECTED_MODEL8_NAME=ark_000008_20250725_8850"
@@ -31,6 +32,8 @@ rem Download URLs
 set "MODEL7_ZIP_URL=https://minicpm.oss-cn-beijing.aliyuncs.com/qualcomm/ark_000007_20250811_8850.zip"
 set "MODEL8_ZIP_URL=https://minicpm.oss-cn-beijing.aliyuncs.com/qualcomm/ark_000008_20250725_8850.zip"
 set "LIBS_ZIP_URL=https://minicpm.oss-cn-beijing.aliyuncs.com/qualcomm/opencl/lib.zip"
+set "APK_ZIP_URL=https://minicpm.oss-cn-beijing.aliyuncs.com/qualcomm/opencl/QcBibao-release-latest.apk.zip"
+set "DEFAULT_APK_NAME=QcBibao-release-latest.apk"
 
 rem Defaults (can be overridden by CLI)
 set "LOCAL_MODEL7=.\%EXPECTED_MODEL7_NAME%"
@@ -59,32 +62,24 @@ if defined APK_PATH goto :validate
   echo.
   echo install_qcguiagent_windows.bat - Provision device models, libs and app via ADB
   echo.
-  echo Required:
-  echo   --apk PATH                 Path to the APK file to push to %DEVICE_VENDOR_DIR%
-  echo Optional:
+  echo Options:
+  echo   --apk PATH                 Path to the APK file. If omitted or missing, the script will download it.
   echo   --serial SERIAL            Target device serial (when multiple devices connected)
   echo   --model7 PATH              Local path to %EXPECTED_MODEL7_NAME% ^(default: %LOCAL_MODEL7%^
   echo   --model8 PATH              Local path to %EXPECTED_MODEL8_NAME% ^(default: %LOCAL_MODEL8%^
   echo   --libs PATH                Local path to BibaoLibs\lib ^(default: %LOCAL_LIBS_DIR%^
   echo Notes:
   echo   - Missing model or libs directories will be downloaded and unzipped automatically.
+  echo   - Missing APK will be downloaded and extracted as %DEFAULT_APK_NAME% in the current directory.
   echo Examples:
   echo   install_qcguiagent_windows.bat --apk .\qcguiagent-release.apk
-  echo   install_qcguiagent_windows.bat --apk .\qcguiagent.apk --serial ABC123 --model7 .\%EXPECTED_MODEL7_NAME% --model8 .\%EXPECTED_MODEL8_NAME% --libs .\BibaoLibs\lib
+  echo   install_qcguiagent_windows.bat --serial ABC123
   exit /b 1
 
 :validate
 where adb >nul 2>&1
 if errorlevel 1 (
   echo [ERROR] adb not found in PATH. Please install Android platform-tools.
-  exit /b 1
-)
-if not defined APK_PATH (
-  echo [ERROR] --apk is required
-  exit /b 1
-)
-if not exist "%APK_PATH%" (
-  echo [ERROR] APK not found: %APK_PATH%
   exit /b 1
 )
 
@@ -216,7 +211,7 @@ exit /b 0
   exit /b 0
 
 :ensure_local_assets
-  echo [INFO] Pre-download: Ensuring local models and libs exist
+  echo [INFO] Pre-download: Ensuring local models, libs and APK exist
   rem model7
   if not exist "%LOCAL_MODEL7%" (
     echo [INFO] Local model missing: %LOCAL_MODEL7%. Downloading...
@@ -255,6 +250,31 @@ exit /b 0
   ) else (
     echo [INFO] Local libs exist: %LOCAL_LIBS_DIR%
   )
+
+  rem APK
+  if "!APK_PATH!"=="" (
+    if exist ".\%DEFAULT_APK_NAME%" (
+      set "APK_PATH=.\%DEFAULT_APK_NAME%"
+    )
+  )
+  if not exist "!APK_PATH!" (
+    echo [INFO] APK missing or not provided. Downloading from %APK_ZIP_URL% ...
+    call :download_and_unzip "%APK_ZIP_URL%" "." || exit /b 1
+    if exist ".\%DEFAULT_APK_NAME%" (
+      set "APK_PATH=.\%DEFAULT_APK_NAME%"
+    ) else (
+      for /f "delims=" %%F in ('dir /b /o:-d *.apk 2^>nul') do (
+        if not defined APK_PATH set "APK_PATH=%%F"
+      )
+    )
+    if not exist "!APK_PATH!" (
+      echo [ERROR] After download, APK not found. Expected .\%DEFAULT_APK_NAME%
+      exit /b 1
+    )
+  ) else (
+    echo [INFO] Local APK exists: !APK_PATH!
+  )
+
   exit /b 0
 
 :get_parent_dir
