@@ -5,27 +5,26 @@ set -euo pipefail
 APK_PATH=""
 MODEL_DIR_DEFAULT="./ark_000007_20250811_8850"
 LIBS_DIR_DEFAULT="./BibaoLibs/lib"
-MODEL_DIR="$MODEL_DIR_DEFAULT"
+MODEL_DIRS=("$MODEL_DIR_DEFAULT")
 LIBS_DIR="$LIBS_DIR_DEFAULT"
 ADB_SERIAL=""
-REMOTE_MODEL_DIR="/data/local/qcguiagent/ark_000007_20250811_8850"
 
 usage() {
   cat <<EOF
-Usage: $(basename "$0") --apk <path_to_apk> [--model-dir <local_model_dir>] [--libs-dir <local_lib_dir>] [--serial <device_serial>]
+Usage: $(basename "$0") --apk <path_to_apk> [--model-dir <local_model_dir> ...] [--libs-dir <local_lib_dir>] [--serial <device_serial>]
 
 Required:
   --apk         Path to local APK file to push to device (/vendor/app/qcguiagent/)
 
 Optional:
-  --model-dir   Local model directory to push if device is missing model (default: ${MODEL_DIR_DEFAULT})
+  --model-dir   Local model directory to push (repeatable). Default includes: ${MODEL_DIR_DEFAULT}
   --libs-dir    Local runtime libs directory to push to device vendor path (default: ${LIBS_DIR_DEFAULT})
   --serial,-s   Target device serial if multiple devices are connected
   -h, --help    Show this help
 
 Notes:
 - Expects ADB available in PATH and a connected device with root access.
-- Will adb root + remount, install model if missing, install libs, uninstall old app, push new APK, reboot, wait, then disable SELinux.
+- Will adb root + remount, install model(s) if missing, install libs, uninstall old app, push new APK, reboot, wait, then disable SELinux.
 EOF
 }
 
@@ -36,7 +35,7 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     --model-dir)
-      MODEL_DIR="${2:-}"
+      MODEL_DIRS+=("${2:-}")
       shift 2
       ;;
     --libs-dir)
@@ -126,28 +125,33 @@ ensure_root_and_remount() {
 }
 
 install_model_if_missing() {
-  log INFO "Checking model at $REMOTE_MODEL_DIR"
-  if adb_cmd shell "[ -e '$REMOTE_MODEL_DIR' ]"; then
-    log INFO "Model already present on device; skipping push"
-    return 0
-  fi
-
-  if [[ ! -e "$MODEL_DIR" ]]; then
-    echo "[ERR] Local model not found: $MODEL_DIR (required because device is missing model)" >&2
-    exit 1
-  fi
-
-  log INFO "Creating remote model parent dir"
+  log INFO "Ensuring model directories on device"
   adb_cmd shell "mkdir -p /data/local/qcguiagent"
+  for local_dir in "${MODEL_DIRS[@]}"; do
+    local base_name remote_dir
+    base_name="$(basename "$local_dir")"
+    remote_dir="/data/local/qcguiagent/${base_name}"
 
-  log INFO "Pushing model from '$MODEL_DIR' to '/data/local/qcguiagent'"
-  adb_cmd push "$MODEL_DIR" "/data/local/qcguiagent"
+    log INFO "Checking model at ${remote_dir}"
+    if adb_cmd shell "[ -e '${remote_dir}' ]"; then
+      log INFO "Model present: ${remote_dir}; skipping"
+      continue
+    fi
 
-  log INFO "Setting owner system:system on model"
-  adb_cmd shell "chown -R system:system '$REMOTE_MODEL_DIR'" || true
+    if [[ ! -e "$local_dir" ]]; then
+      echo "[ERR] Local model not found: $local_dir (required because device is missing this model)" >&2
+      exit 1
+    fi
 
-  log INFO "Setting permissions 777 on model"
-  adb_cmd shell "chmod -R 777 '$REMOTE_MODEL_DIR'" || true
+    log INFO "Pushing model from '${local_dir}' to '/data/local/qcguiagent'"
+    adb_cmd push "$local_dir" "/data/local/qcguiagent"
+
+    log INFO "Setting owner system:system on ${remote_dir}"
+    adb_cmd shell "chown -R system:system '${remote_dir}'" || true
+
+    log INFO "Setting permissions 777 on ${remote_dir}"
+    adb_cmd shell "chmod -R 777 '${remote_dir}'" || true
+  done
 }
 
 install_runtime_libs() {
