@@ -18,6 +18,9 @@ set -euo pipefail
 # 7) Reboot
 # 8) Wait for reboot completion
 # 9) adb root; disable SELinux (setenforce 0)
+#
+# Additionally:
+# - If local model or libs directories are missing, they will be downloaded from predefined URLs and unzipped.
 
 SCRIPT_NAME=$(basename "$0")
 
@@ -26,6 +29,11 @@ EXPECTED_MODEL8_NAME="ark_000008_20250725_8850"
 DEVICE_MODEL_DIR="/data/local/qcguiagent"
 DEVICE_VENDOR_DIR="/vendor/app/qcguiagent"
 PACKAGE_NAME="com.modelbest.qcguiagent"
+
+# Download URLs
+MODEL7_ZIP_URL="https://minicpm.oss-cn-beijing.aliyuncs.com/qualcomm/ark_000007_20250811_8850.zip"
+MODEL8_ZIP_URL="https://minicpm.oss-cn-beijing.aliyuncs.com/qualcomm/ark_000008_20250725_8850.zip"
+LIBS_ZIP_URL="https://minicpm.oss-cn-beijing.aliyuncs.com/qualcomm/opencl/lib.zip"
 
 # Defaults (can be overridden by CLI)
 LOCAL_MODEL7="./${EXPECTED_MODEL7_NAME}"
@@ -47,6 +55,10 @@ Optional:
   --model8 PATH              Local path to ${EXPECTED_MODEL8_NAME} (default: ${LOCAL_MODEL8})
   --libs PATH                Local path to BibaoLibs/lib (default: ${LOCAL_LIBS_DIR})
   -h, --help                 Show this help and exit
+
+Notes:
+  - If the specified model or libs directories do not exist locally, the script will download
+    the corresponding ZIPs and unzip them into the appropriate parent directories automatically.
 
 Examples:
   ${SCRIPT_NAME} --apk ./qcguiagent-release.apk
@@ -125,7 +137,79 @@ wait_for_device_and_boot() {
   log "Device boot complete."
 }
 
+# ------------------------------------------------------------
+# Download helpers and preflight for local assets
+# ------------------------------------------------------------
+require_cmd() {
+  command -v "$1" >/dev/null 2>&1 || fail "Required command not found: $1"
+}
+
+download_file() {
+  local url="$1"
+  local output="$2"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fL --retry 3 --connect-timeout 15 -o "$output" "$url"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -O "$output" "$url"
+  else
+    fail "Neither curl nor wget is available for downloads"
+  fi
+}
+
+unzip_to_dir() {
+  local zip_path="$1"
+  local dest_dir="$2"
+  require_cmd unzip
+  mkdir -p "$dest_dir"
+  unzip -o "$zip_path" -d "$dest_dir" >/dev/null
+}
+
+ensure_local_assets() {
+  # Ensure model7 directory exists
+  if [[ ! -d "${LOCAL_MODEL7}" ]]; then
+    log "Local model missing: ${LOCAL_MODEL7}. Downloading..."
+    local tmpzip
+    tmpzip=$(mktemp -t model7.XXXXXX.zip)
+    download_file "${MODEL7_ZIP_URL}" "${tmpzip}"
+    unzip_to_dir "${tmpzip}" "$(dirname "${LOCAL_MODEL7}")"
+    rm -f "${tmpzip}"
+    [[ -d "${LOCAL_MODEL7}" ]] || fail "After download, directory still missing: ${LOCAL_MODEL7}"
+  else
+    log "Local model exists: ${LOCAL_MODEL7}"
+  fi
+
+  # Ensure model8 directory exists
+  if [[ ! -d "${LOCAL_MODEL8}" ]]; then
+    log "Local model missing: ${LOCAL_MODEL8}. Downloading..."
+    local tmpzip
+    tmpzip=$(mktemp -t model8.XXXXXX.zip)
+    download_file "${MODEL8_ZIP_URL}" "${tmpzip}"
+    unzip_to_dir "${tmpzip}" "$(dirname "${LOCAL_MODEL8}")"
+    rm -f "${tmpzip}"
+    [[ -d "${LOCAL_MODEL8}" ]] || fail "After download, directory still missing: ${LOCAL_MODEL8}"
+  else
+    log "Local model exists: ${LOCAL_MODEL8}"
+  fi
+
+  # Ensure libs directory exists under LOCAL_LIBS_DIR
+  if [[ ! -d "${LOCAL_LIBS_DIR}" ]]; then
+    log "Local libs missing: ${LOCAL_LIBS_DIR}. Downloading..."
+    local tmpzip parent_dir
+    tmpzip=$(mktemp -t libs.XXXXXX.zip)
+    parent_dir=$(dirname "${LOCAL_LIBS_DIR}")
+    mkdir -p "${parent_dir}"
+    download_file "${LIBS_ZIP_URL}" "${tmpzip}"
+    unzip_to_dir "${tmpzip}" "${parent_dir}"
+    rm -f "${tmpzip}"
+    [[ -d "${LOCAL_LIBS_DIR}" ]] || fail "After download, directory still missing: ${LOCAL_LIBS_DIR}"
+  else
+    log "Local libs exist: ${LOCAL_LIBS_DIR}"
+  fi
+}
+
+# ------------------------------------------------------------
 # Push a local path (file or directory) to device parent dir, then rename to expected name if needed
+# ------------------------------------------------------------
 push_to_device_as_name() {
   local local_path="$1"       # e.g. ./ark_000007_...
   local device_parent="$2"    # e.g. /data/local/qcguiagent
@@ -203,6 +287,9 @@ main() {
   if [[ "${device_count}" -gt 1 && -z "${SERIAL}" ]]; then
     warn "Multiple devices detected. Consider using --serial to target a specific device. Proceeding with default.";
   fi
+
+  log "Pre-download: Ensuring local models and libs exist"
+  ensure_local_assets
 
   log "Step 1: Acquire root and remount"
   ensure_root_and_remount
