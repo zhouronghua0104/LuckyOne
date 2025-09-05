@@ -23,6 +23,11 @@ try:
 except Exception:
 	xmltodict = None
 
+try:
+	import requests  # type: ignore
+except Exception:
+	requests = None
+
 
 def _safe_int(value: Any, default: int = 0) -> int:
 	try:
@@ -178,6 +183,25 @@ def extract_xmp(path: str) -> Union[Dict[str, Any], str, None]:
 		return None
 
 
+def reverse_geocode_nominatim(lat: float, lon: float, lang: Optional[str] = None, email: Optional[str] = None, timeout: float = 10.0) -> Dict[str, Any]:
+	if requests is None:
+		raise RuntimeError("requests is required for reverse geocoding. Please install dependencies.")
+	headers = {"User-Agent": "image-meta-cli/1.0 (+https://nominatim.openstreetmap.org)"}
+	if lang:
+		headers["Accept-Language"] = lang
+	params = {
+		"format": "jsonv2",
+		"lat": str(lat),
+		"lon": str(lon),
+		"addressdetails": 1,
+	}
+	if email:
+		params["email"] = email
+	r = requests.get("https://nominatim.openstreetmap.org/reverse", params=params, headers=headers, timeout=timeout)
+	r.raise_for_status()
+	return r.json()
+
+
 def extract_metadata_for_file(path: str) -> Dict[str, Any]:
 	result: Dict[str, Any] = {
 		"file": extract_file_info(path),
@@ -239,10 +263,30 @@ def walk_image_files(paths: List[str], recursive: bool) -> List[str]:
 
 def main() -> None:
 	parser = argparse.ArgumentParser(description="Image metadata inspector (file info, EXIF, GPS, IPTC, XMP)")
-	parser.add_argument('paths', nargs='+', help='Image file(s) or directory(ies)')
+	parser.add_argument('paths', nargs='*', help='Image file(s) or directory(ies)')
 	parser.add_argument('-r', '--recursive', action='store_true', help='Recurse into directories')
 	parser.add_argument('-p', '--pretty', action='store_true', help='Pretty-print JSON')
+	parser.add_argument('--reverse', action='store_true', help='Reverse geocode images that have GPS into human-readable addresses')
+	parser.add_argument('--reverse-lat', type=float, help='Latitude for direct reverse geocoding')
+	parser.add_argument('--reverse-lon', type=float, help='Longitude for direct reverse geocoding')
+	parser.add_argument('--lang', default=None, help='Accept-Language for reverse geocoding (e.g., zh-CN)')
+	parser.add_argument('--nominatim-email', default=None, help='Contact email for Nominatim per usage policy')
 	args = parser.parse_args()
+
+	# direct reverse geocoding mode
+	if args.reverse_lat is not None and args.reverse_lon is not None:
+		try:
+			res = reverse_geocode_nominatim(args.reverse_lat, args.reverse_lon, args.lang, args.nominatim_email)
+			doc = res
+			print(json.dumps(doc, ensure_ascii=False, indent=2 if args.pretty else None))
+			return
+		except Exception as e:
+			print(json.dumps({"error": str(e)}, ensure_ascii=False, indent=2 if args.pretty else None))
+			return
+
+	if not args.paths:
+		print("No input paths provided and no --reverse-lat/--reverse-lon. See --help.", file=sys.stderr)
+		sys.exit(2)
 
 	files = walk_image_files(args.paths, args.recursive)
 	if not files:
@@ -252,7 +296,21 @@ def main() -> None:
 	results = []
 	for fpath in files:
 		try:
-			results.append(extract_metadata_for_file(fpath))
+			item = extract_metadata_for_file(fpath)
+			# reverse geocode if requested and gps present
+			if args.reverse and isinstance(item.get('gps'), dict):
+				lat = item['gps'].get('latitude')
+				lon = item['gps'].get('longitude')
+				if isinstance(lat, float) and isinstance(lon, float):
+					try:
+						geo = reverse_geocode_nominatim(lat, lon, args.lang, args.nominatim_email)
+						item['address'] = {
+							'display_name': geo.get('display_name'),
+							'raw': geo.get('address', geo)
+						}
+					except Exception as ge:
+						item['address_error'] = str(ge)
+			results.append(item)
 		except Exception as e:
 			results.append({"file": {"path": os.path.abspath(fpath)}, "error": str(e)})
 

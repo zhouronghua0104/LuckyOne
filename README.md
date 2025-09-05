@@ -1,6 +1,6 @@
 # Image Metadata CLI
 
-A simple Python tool to read image metadata (file info, dimensions, EXIF with GPS, IPTC, and XMP) and output JSON.
+A simple Python tool to read image metadata (file info, dimensions, EXIF with GPS, IPTC, and XMP) and output JSON. It also supports reverse geocoding (coords -> address) using OpenStreetMap Nominatim.
 
 ## Install
 
@@ -12,15 +12,27 @@ pip install -r requirements.txt
 
 ## Usage
 
+- Single image file:
 ```bash
 python image_meta.py /path/to/image.jpg --pretty
+```
+
+- Directory (recursive):
+```bash
 python image_meta.py /path/to/dir -r --pretty
 ```
 
-- Outputs a JSON array of objects with keys: `file`, `image`, `exif_pillow`, `exif_extra`, `gps`, `iptc`, `xmp`, `camera` (when available).
-- `--pretty` prints human-readable JSON.
+- Reverse geocode coordinates directly:
+```bash
+python image_meta.py --reverse-lat 39.96525 --reverse-lon 116.40406 --lang zh-CN --pretty
+```
 
-## Notes
-- EXIF GPS requires GPS tags present in the image.
-- IPTC is best-effort via JPEG APP13; may be empty on non-JPEG formats.
-- XMP is extracted as raw XML text if `xmltodict` isn't available; otherwise parsed to a dict.
+- Add reverse geocoded address to images that have GPS:
+```bash
+python image_meta.py /path/to/dir -r --reverse --lang zh-CN --pretty
+```
+
+Notes:
+- `--lang` controls the preferred language of the returned address (e.g., `zh-CN`).
+- `--nominatim-email` can be provided to comply with Nominatim usage policy.
+- Output includes keys: `file`, `image`, `exif_pillow`, `exif_extra`, `gps`, `iptc`, `xmp`, `camera`, and optionally `address`.
