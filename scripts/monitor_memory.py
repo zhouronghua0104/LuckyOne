@@ -21,9 +21,10 @@ Example usage::
         --input memory_usage.csv \
         --output memory_usage.png
 
-The CSV file records timestamps in ISO-8601 format, elapsed seconds, and
-several key memory metrics (all in kilobytes) that are reported by
-``dumpsys meminfo`` under the ``TOTAL`` row.
+    The CSV file records timestamps in ISO-8601 format, elapsed seconds, and
+    several key memory metrics (all in kilobytes) that are reported by
+    ``dumpsys meminfo`` under the ``TOTAL`` row, along with system-wide memory
+    usage derived from ``/proc/meminfo``.
 """
 
 from __future__ import annotations
@@ -33,13 +34,19 @@ import csv
 import datetime as dt
 import signal
 import subprocess
-import sys
 import time
 from pathlib import Path
 from typing import Iterable, Optional
 
 
 TOTAL_LINE_PREFIX = "TOTAL"
+MEMINFO_KEYS = {
+    "MemTotal": "system_total_kb",
+    "MemFree": "system_free_kb",
+    "Buffers": "system_buffers_kb",
+    "Cached": "system_cached_kb",
+    "MemAvailable": "system_available_kb",
+}
 
 
 class GracefulTerminator:
@@ -112,6 +119,29 @@ def fetch_meminfo(package: str) -> Optional[dict[str, int]]:
     return None
 
 
+def fetch_system_meminfo() -> Optional[dict[str, int]]:
+    """Fetches system-wide memory stats from /proc/meminfo."""
+
+    output = run_adb_command(["shell", "cat", "/proc/meminfo"])
+    values: dict[str, int] = {}
+    for line in output.splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and parts[0].rstrip(":") in MEMINFO_KEYS:
+            key = parts[0].rstrip(":")
+            try:
+                values[MEMINFO_KEYS[key]] = int(parts[1])
+            except ValueError:
+                return None
+
+    if not values:
+        return None
+
+    if "system_total_kb" in values and "system_free_kb" in values:
+        values["system_used_kb"] = values["system_total_kb"] - values["system_free_kb"]
+
+    return values
+
+
 def collect_memory_samples(
     package: str,
     interval: float,
@@ -135,6 +165,12 @@ def collect_memory_samples(
         "heap_size_kb",
         "heap_alloc_kb",
         "heap_free_kb",
+        "system_total_kb",
+        "system_free_kb",
+        "system_buffers_kb",
+        "system_cached_kb",
+        "system_available_kb",
+        "system_used_kb",
     ]
 
     with output_csv.open("w", newline="") as csvfile:
@@ -152,30 +188,39 @@ def collect_memory_samples(
                 break
 
             meminfo = fetch_meminfo(package)
+            system_mem = fetch_system_meminfo()
             timestamp = start_wall + dt.timedelta(seconds=elapsed)
             iso_ts = timestamp.isoformat()
 
+            row = {
+                "timestamp_utc": iso_ts,
+                "elapsed_seconds": f"{elapsed:.3f}",
+                "total_pss_kb": "",
+                "private_dirty_kb": "",
+                "private_clean_kb": "",
+                "swapped_dirty_kb": "",
+                "heap_size_kb": "",
+                "heap_alloc_kb": "",
+                "heap_free_kb": "",
+                "system_total_kb": "",
+                "system_free_kb": "",
+                "system_buffers_kb": "",
+                "system_cached_kb": "",
+                "system_available_kb": "",
+                "system_used_kb": "",
+            }
+
             if meminfo is None:
-                row = {
-                    "timestamp_utc": iso_ts,
-                    "elapsed_seconds": f"{elapsed:.3f}",
-                    "total_pss_kb": "",
-                    "private_dirty_kb": "",
-                    "private_clean_kb": "",
-                    "swapped_dirty_kb": "",
-                    "heap_size_kb": "",
-                    "heap_alloc_kb": "",
-                    "heap_free_kb": "",
-                }
-                writer.writerow(row)
-                print("Warning: Failed to parse meminfo output. Blank row written.")
+                print("Warning: Failed to parse meminfo output for app. App columns left blank.")
             else:
-                row = {
-                    "timestamp_utc": iso_ts,
-                    "elapsed_seconds": f"{elapsed:.3f}",
-                    **meminfo,
-                }
-                writer.writerow(row)
+                row.update(meminfo)
+
+            if system_mem is None:
+                print("Warning: Failed to read system memory info. System columns left blank.")
+            else:
+                row.update(system_mem)
+
+            writer.writerow(row)
 
             csvfile.flush()
             time.sleep(interval)
@@ -194,6 +239,7 @@ def plot_memory_curve(input_csv: Path, output_image: Optional[Path]) -> None:
     timestamps: list[float] = []
     total_pss: list[float] = []
     heap_alloc: list[float] = []
+    system_used: list[float] = []
 
     with input_csv.open("r", newline="") as csvfile:
         reader = csv.DictReader(csvfile)
@@ -220,12 +266,16 @@ def plot_memory_curve(input_csv: Path, output_image: Optional[Path]) -> None:
             total_pss.append(total_val if total_val is not None else float("nan"))
             heap_alloc.append(heap_alloc_val if heap_alloc_val is not None else float("nan"))
 
+            system_used_val = parse_field("system_used_kb")
+            system_used.append(system_used_val if system_used_val is not None else float("nan"))
+
     if not timestamps:
         raise RuntimeError("No valid data rows found in CSV. Cannot plot.")
 
     plt.figure(figsize=(10, 6))
     plt.plot(timestamps, total_pss, label="Total PSS (KB)", linewidth=2)
     plt.plot(timestamps, heap_alloc, label="Heap Alloc (KB)", linewidth=1.5, linestyle="--")
+    plt.plot(timestamps, system_used, label="System Used (KB)", linewidth=1.5, linestyle=":")
     plt.title("Inference Memory Usage Over Time")
     plt.xlabel("Elapsed Time (s)")
     plt.ylabel("Memory (KB)")
