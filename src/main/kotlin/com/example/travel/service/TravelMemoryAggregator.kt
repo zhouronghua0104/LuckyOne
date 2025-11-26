@@ -236,11 +236,6 @@ class TravelMemoryAggregator(
         val minutesOfDay: Int
     )
 
-    private data class AggregationResult(
-        val habit: TravelHabits,
-        val sessionIds: List<Long>
-    )
-
     data class AggregationReport(
         val createdHabits: List<TravelHabits>,
         val consumedSessionIds: List<Long>,
