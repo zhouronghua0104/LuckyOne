@@ -53,6 +53,7 @@ class TravelMemoryAggregator(
 ) {
 
     private val cycleLength: Duration = Duration.ofDays(14)
+    private var aggregationReferenceInstant: Instant = Instant.EPOCH
 
     /**
      * Performs one aggregation pass and returns a report describing the outcome.
@@ -69,16 +70,8 @@ class TravelMemoryAggregator(
             return AggregationReport(emptyList(), emptyList(), staleRemoved, analyzedHistoryCount = 0)
         }
 
-        val aggregationResults = eligibleHistories
-            .groupBy { it.userId to it.destination }
-            .flatMap { (key, groupedHistories) ->
-                aggregateGroup(
-                    userId = key.first,
-                    destination = key.second,
-                    histories = groupedHistories,
-                    now = now
-                )
-            }
+        aggregationReferenceInstant = now
+        val aggregationResults = sumUpHistoryRecords(eligibleHistories)
 
         val createdHabits = aggregationResults.map { it.habit }
         val consumedSessionIds = aggregationResults.flatMap { it.sessionIds }
@@ -98,12 +91,30 @@ class TravelMemoryAggregator(
         )
     }
 
+    /**
+     * 归纳历史行程记录列表
+     *
+     * 根据用户 ID、目的地、到达时间（日期 + 时刻）三要素进行聚合，
+     * 生成对应的长期行程记忆。
+     */
+    private fun sumUpHistoryRecords(historyList: List<TravelHistory>): List<AggregationResult> {
+        return historyList
+            .groupBy { it.userId to it.destination }
+            .flatMap { (key, groupedHistories) ->
+                aggregateGroup(
+                    userId = key.first,
+                    destination = key.second,
+                    histories = groupedHistories
+                )
+            }
+    }
+
     private fun aggregateGroup(
         userId: Long,
         destination: String,
-        histories: List<TravelHistory>,
-        now: Instant
+        histories: List<TravelHistory>
     ): List<AggregationResult> {
+        val now = aggregationReferenceInstant
         val snapshots = histories.map { history ->
             val reachDateTime = Instant.ofEpochMilli(history.reachTime).atZone(zoneId)
             HistorySnapshot(
