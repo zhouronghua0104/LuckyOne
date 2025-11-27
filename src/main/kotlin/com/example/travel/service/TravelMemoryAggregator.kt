@@ -164,16 +164,17 @@ class TravelMemoryAggregator(
         val sorted = histories.sortedBy { it.minutesOfDay }
         val clusters = mutableListOf<MutableList<HistorySnapshot>>()
         var currentCluster = mutableListOf(sorted.first())
-        var clusterMax = sorted.first().minutesOfDay
+        var clusterMin = sorted.first().minutesOfDay
 
         for (snapshot in sorted.drop(1)) {
-            if (snapshot.minutesOfDay - clusterMax <= MAX_TIME_DIFFERENCE_MINUTES) {
+            val minutes = snapshot.minutesOfDay
+            if (minutes - clusterMin <= MAX_TIME_DIFFERENCE_MINUTES) {
                 currentCluster.add(snapshot)
             } else {
                 clusters.add(currentCluster)
                 currentCluster = mutableListOf(snapshot)
+                clusterMin = minutes
             }
-            clusterMax = snapshot.minutesOfDay
         }
         clusters.add(currentCluster)
         return clusters
