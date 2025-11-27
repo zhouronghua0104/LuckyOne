@@ -12,8 +12,8 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Description
-import androidx.compose.material.icons.outlined.FolderOpen
+import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.Button
@@ -103,10 +103,10 @@ fun ExclusiveMapView(
                 modifier = Modifier.fillMaxWidth(),
                 placeholder = { Text(text = "例如：/sdcard/Download/trips_2024.csv") },
                 singleLine = true,
-                leadingIcon = { Icon(Icons.Outlined.Description, contentDescription = null) },
+                leadingIcon = { Icon(Icons.Filled.Description, contentDescription = null) },
                 trailingIcon = {
                     IconButton(onClick = { /* 打开文件选择器 */ }) {
-                        Icon(Icons.Outlined.FolderOpen, contentDescription = null)
+                        Icon(Icons.Filled.Folder, contentDescription = null)
                     }
                 },
                 supportingText = { Text(text = "目前支持 CSV / XLSX / JSON 文件") },
