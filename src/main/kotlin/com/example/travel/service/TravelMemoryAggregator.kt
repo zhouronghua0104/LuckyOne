@@ -4,6 +4,11 @@ import com.example.travel.data.TravelHabits
 import com.example.travel.data.TravelHistory
 import com.example.travel.data.dao.TravelHabitsDao
 import com.example.travel.data.dao.TravelHistoryDao
+import java.nio.file.Files
+import java.nio.file.Path
+import java.nio.file.Paths
+import java.text.ParseException
+import java.text.SimpleDateFormat
 import java.time.Clock
 import java.time.DayOfWeek
 import java.time.Duration
@@ -12,6 +17,13 @@ import java.time.LocalDate
 import java.time.LocalTime
 import java.time.ZoneId
 import java.util.Locale
+import java.util.UUID
+import kotlin.math.abs
+import org.apache.poi.ss.usermodel.DataFormatter
+import org.apache.poi.ss.usermodel.WorkbookFactory
+import org.apache.poi.ss.usermodel.Row
+import org.json.JSONArray
+import org.json.JSONObject
 
 private const val MINUTES_IN_DAY = 24 * 60
 private const val HALF_HOUR_MINUTES = 30
@@ -243,6 +255,161 @@ class TravelMemoryAggregator(
         val staleHistoryDeleted: Int,
         val analyzedHistoryCount: Int
     )
+
+    /**
+     * 从外部文件导入历史行程记录。
+     */
+    private fun importTripHistory(importFilePath: String): List<TravelHistory> {
+        val path = Paths.get(importFilePath)
+        require(Files.exists(path)) { "Import file not found: $importFilePath" }
+
+        val extension = path.fileName.toString()
+            .substringAfterLast('.', missingDelimiterValue = "")
+            .lowercase(Locale.ROOT)
+
+        return when (extension) {
+            "csv", "txt" -> parseDelimitedFile(path)
+            "json" -> parseJsonFile(path)
+            "xlsx" -> parseXlsxFile(path)
+            else -> parseDelimitedFile(path) // fallback for unknown, treat as text
+        }
+    }
+
+    private fun parseDelimitedFile(path: Path): List<TravelHistory> {
+        if (Files.size(path) == 0L) return emptyList()
+        return Files.newBufferedReader(path).use { reader ->
+            reader.lineSequence()
+                .mapNotNull { parseDelimitedLine(it) }
+                .toList()
+        }
+    }
+
+    private fun parseDelimitedLine(rawLine: String): TravelHistory? {
+        val cleaned = rawLine.trim()
+            .trimStart('[')
+            .trimEnd(']', ',')
+        if (cleaned.isBlank()) return null
+        val pieces = cleaned.split(',')
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+
+        return buildHistoryFromFields(pieces)
+    }
+
+    private fun parseJsonFile(path: Path): List<TravelHistory> {
+        val content = Files.readString(path).trim()
+        if (content.isEmpty()) return emptyList()
+
+        val result = mutableListOf<TravelHistory>()
+        when {
+            content.startsWith("[") -> {
+                val array = JSONArray(content)
+                for (i in 0 until array.length()) {
+                    when (val entry = array.get(i)) {
+                        is JSONObject -> buildHistoryFromJson(entry)?.let(result::add)
+                        is JSONArray -> {
+                            val fields = mutableListOf<String>()
+                            for (j in 0 until entry.length()) {
+                                fields += entry.get(j).toString().trim()
+                            }
+                            buildHistoryFromFields(fields)?.let(result::add)
+                        }
+                    }
+                }
+            }
+            content.startsWith("{") -> {
+                buildHistoryFromJson(JSONObject(content))?.let(result::add)
+            }
+        }
+        return result
+    }
+
+    private fun parseXlsxFile(path: Path): List<TravelHistory> {
+        val formatter = DataFormatter()
+        return Files.newInputStream(path).use { input ->
+            WorkbookFactory.create(input).use { workbook ->
+                val histories = mutableListOf<TravelHistory>()
+                for (sheetIndex in 0 until workbook.numberOfSheets) {
+                    val sheet = workbook.getSheetAt(sheetIndex)
+                    for (rowIndex in sheet.firstRowNum..sheet.lastRowNum) {
+                        val row = sheet.getRow(rowIndex) ?: continue
+                        val fields = rowToFields(row, formatter)
+                        buildHistoryFromFields(fields)?.let(histories::add)
+                    }
+                }
+                histories
+            }
+        }
+    }
+
+    private fun rowToFields(row: Row, formatter: DataFormatter): List<String> {
+        val result = mutableListOf<String>()
+        for (cellIndex in 0..3) {
+            val cell = row.getCell(cellIndex) ?: continue
+            val value = formatter.formatCellValue(cell).trim()
+            if (value.isNotEmpty()) {
+                result.add(value)
+            }
+        }
+        return result
+    }
+
+    private fun buildHistoryFromJson(json: JSONObject): TravelHistory? {
+        val fields = listOf(
+            json.optString("userId"),
+            json.optString("destination"),
+            json.optString("reachTime", json.optString("reach_time")),
+            json.optString("relationShip", json.optString("relationship"))
+        )
+        return buildHistoryFromFields(fields)
+    }
+
+    private fun buildHistoryFromFields(fields: List<String>): TravelHistory? {
+        if (fields.size < 3) return null
+        val userId = fields[0].toLongOrNull() ?: return null
+        val destination = fields[1]
+        val reachTime = parseEpochMillis(fields[2]) ?: return null
+        val relationship = fields.getOrNull(3).orEmpty()
+
+        return TravelHistory(
+            sessionId = generateSessionId(),
+            createTime = System.currentTimeMillis(),
+            userId = userId,
+            destination = destination,
+            reachTime = reachTime,
+            relationShip = relationship
+        )
+    }
+
+    private fun parseEpochMillis(raw: String?): Long? {
+        raw ?: return null
+        val normalized = raw.trim()
+        if (normalized.isEmpty()) return null
+
+        val patterns = listOf(
+            "yyyy-MM-dd HH:mm:ss",
+            "yyyy-MM-dd HH:mm",
+            "yyyy/MM/dd HH:mm:ss",
+            "yyyy/MM/dd HH:mm"
+        )
+
+        for (pattern in patterns) {
+            try {
+                val sdf = SimpleDateFormat(pattern, Locale.getDefault())
+                sdf.isLenient = false
+                return sdf.parse(normalized)?.time
+            } catch (_: ParseException) {
+                // try next pattern
+            }
+        }
+        return null
+    }
+
+    private fun generateSessionId(): Long {
+        val uuid = UUID.randomUUID()
+        val candidate = uuid.mostSignificantBits xor uuid.leastSignificantBits
+        return abs(candidate)
+    }
 }
 
 private val weekdayLabels = mapOf(
