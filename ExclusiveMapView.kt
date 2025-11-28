@@ -12,20 +12,26 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -47,11 +53,41 @@ fun ExclusiveMapView(
     var importFilePath by rememberSaveable { mutableStateOf("") }
     var importMessage by remember { mutableStateOf<String?>(null) }
     var isImporting by remember { mutableStateOf(false) }
+    var expandedTagId by remember { mutableStateOf<Long?>(null) }
     val sampleFiles = listOf(
         "/sdcard/Download/history_trips.csv",
         "/sdcard/Documents/trips_2024.xlsx",
         "/storage/emulated/0/trips_backup.json"
     )
+    val travelTagOptions = listOf("公司", "孩子学校", "健身房", "孩子培训班", "爱人公司")
+    val travelHabits = remember {
+        mutableStateListOf(
+            TravelHabits(
+                msgId = 1L,
+                userId = 100001L,
+                relationShip = "本人",
+                travelTag = "公司",
+                destination = "虹桥商务区 · 办公室",
+                reachTime = "09:00"
+            ),
+            TravelHabits(
+                msgId = 2L,
+                userId = 100001L,
+                relationShip = "孩子",
+                travelTag = "孩子学校",
+                destination = "上海枫叶学校",
+                reachTime = "07:40"
+            ),
+            TravelHabits(
+                msgId = 3L,
+                userId = 100001L,
+                relationShip = "爱人",
+                travelTag = "爱人公司",
+                destination = "浦东金融中心",
+                reachTime = "08:30"
+            )
+        )
+    }
 
     Column(modifier = modifier.verticalScroll(scrollState)) {
         Column(
@@ -162,9 +198,177 @@ fun ExclusiveMapView(
                 Text(text = "查看导入说明")
             }
         }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp)
+        ) {
+            Text(
+                text = "个人地图专属",
+                style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = "用户行程习惯",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+
+            if (travelHabits.isEmpty()) {
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    color = Color(0xFFF2F5F9),
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(20.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            text = "暂无行程习惯",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = "拍照、上传或语音即可新增常去地点",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    travelHabits.forEachIndexed { index, habit ->
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            color = Color(0xFFF5FAFB),
+                            shape = RoundedCornerShape(18.dp),
+                            tonalElevation = 1.dp
+                        ) {
+                            Column(modifier = Modifier.padding(16.dp)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        text = "用户ID：${habit.userId}",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                    Spacer(modifier = Modifier.width(12.dp))
+                                    Text(
+                                        text = "关系：${habit.relationShip.ifBlank { "未知" }}",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "行程${index + 1}",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Surface(
+                                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.1f),
+                                        shape = RoundedCornerShape(50)
+                                    ) {
+                                        Text(
+                                            text = habit.travelTag.ifBlank { "未设置标签" },
+                                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.weight(1f))
+                                    Box {
+                                        IconButton(onClick = {
+                                            expandedTagId = if (expandedTagId == habit.msgId) null else habit.msgId
+                                        }) {
+                                            Icon(
+                                                imageVector = Icons.Filled.Edit,
+                                                contentDescription = "修改行程标签"
+                                            )
+                                        }
+                                        DropdownMenu(
+                                            expanded = expandedTagId == habit.msgId,
+                                            onDismissRequest = { expandedTagId = null }
+                                        ) {
+                                            travelTagOptions.forEach { option ->
+                                                DropdownMenuItem(
+                                                    text = { Text(option) },
+                                                    onClick = {
+                                                        travelHabits[index] = habit.copy(travelTag = option)
+                                                        expandedTagId = null
+                                                    }
+                                                )
+                                            }
+                                        }
+                                    }
+                                    TextButton(
+                                        onClick = {
+                                            travelHabits.removeAt(index)
+                                            if (expandedTagId == habit.msgId) expandedTagId = null
+                                        }
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Filled.Delete,
+                                            contentDescription = "删除行程"
+                                        )
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text(text = "删除")
+                                    }
+                                }
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text(
+                                    text = "你可以直接语音给我说“xxxx”“xxxx”来发起导航，去你常去的地方",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Spacer(modifier = Modifier.height(10.dp))
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(
+                                        text = "目的地：${habit.destination}",
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+                                    Text(
+                                        text = "到达时间 ${habit.reachTime}",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.secondary
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
 interface ExclusiveMapActivity {
     fun importTripHistory(filePath: String)
 }
+
+data class TravelHabits(
+    var msgId: Long = 0L,
+    var createTime: Long = 0L,
+    var userId: Long = 0L,
+    var departure: String = "",
+    var destination: String = "",
+    var leaveTime: String = "",
+    var reachTime: String = "",
+    var relationShip: String = "",
+    var travelTag: String = "",
+    var associatedContacts: String = ""
+)
