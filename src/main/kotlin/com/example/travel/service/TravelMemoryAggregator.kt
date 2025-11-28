@@ -1,5 +1,6 @@
 package com.example.travel.service
 
+import android.annotation.SuppressLint
 import com.example.travel.data.TravelHabits
 import com.example.travel.data.TravelHistory
 import com.example.travel.data.dao.TravelHabitsDao
@@ -152,7 +153,7 @@ class TravelMemoryAggregator(
             val weekSummary = summarizeWeekdays(cluster)
             val relationShip = pickDominantRelationship(cluster)
 
-            val habitReachEpoch = canonicalInstantFromTime(canonicalTime, now)
+            val habitReachEpoch = canonicalEpochMillisFromTime(canonicalTime, now)
 
             val habit = TravelHabits(
                 createTime = now.toEpochMilli(),
@@ -232,7 +233,19 @@ class TravelMemoryAggregator(
         return counts.maxByOrNull { it.value }?.key.orEmpty()
     }
 
-    private fun canonicalInstantFromTime(time: LocalTime, referenceInstant: Instant): Long {
+    @SuppressLint("NewApi")
+    private fun canonicalInstantFromTime(time: LocalTime, referenceInstant: Instant): String {
+        val hour = time.hour
+        val minute = time.minute
+        val minuteText = minute.toString().padStart(2, '0')
+        return if (hour < 10) {
+            "${hour}:${minuteText}"
+        } else {
+            "$hour:$minuteText"
+        }
+    }
+
+    private fun canonicalEpochMillisFromTime(time: LocalTime, referenceInstant: Instant): Long {
         val referenceDate: LocalDate = referenceInstant.atZone(zoneId).toLocalDate()
         return referenceDate
             .atTime(time)
