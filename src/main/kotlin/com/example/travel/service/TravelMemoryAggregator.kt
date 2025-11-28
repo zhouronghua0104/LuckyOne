@@ -19,6 +19,7 @@ import java.time.ZoneId
 import java.util.Locale
 import java.util.UUID
 import kotlin.math.abs
+import kotlin.text.Charsets
 import org.apache.poi.ss.usermodel.DataFormatter
 import org.apache.poi.ss.usermodel.WorkbookFactory
 import org.apache.poi.ss.usermodel.Row
@@ -26,7 +27,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 private const val MINUTES_IN_DAY = 24 * 60
-private const val HALF_HOUR_MINUTES = 30
+private const val QUARTER_HOUR_MINUTES = 15
 private const val MAX_TIME_DIFFERENCE_MINUTES = 60
 private const val MIN_OCCURRENCES_FOR_HABIT = 2
 
@@ -193,16 +194,17 @@ class TravelMemoryAggregator(
     }
 
     private fun determineCanonicalTime(cluster: List<HistorySnapshot>): LocalTime {
-        val normalizedCounts = cluster
-            .map { normalizeToNearestHalfHour(it.minutesOfDay) }
-            .groupingBy { it }
-            .eachCount()
-
-        return normalizedCounts.maxByOrNull { it.value }?.key ?: LocalTime.MIDNIGHT
+        val latest = cluster.maxByOrNull { it.minutesOfDay } ?: return LocalTime.MIDNIGHT
+        return normalizeToNearestQuarterHour(latest.minutesOfDay)
     }
 
-    private fun normalizeToNearestHalfHour(minutesOfDay: Int): LocalTime {
-        val roundedMinutes = ((minutesOfDay + HALF_HOUR_MINUTES / 2) / HALF_HOUR_MINUTES) * HALF_HOUR_MINUTES
+    private fun normalizeToNearestQuarterHour(minutesOfDay: Int): LocalTime {
+        val remainder = minutesOfDay % QUARTER_HOUR_MINUTES
+        val roundedMinutes = if (remainder >= (QUARTER_HOUR_MINUTES / 2)) {
+            minutesOfDay + (QUARTER_HOUR_MINUTES - remainder)
+        } else {
+            minutesOfDay - remainder
+        }
         val normalizedMinutes = Math.floorMod(roundedMinutes, MINUTES_IN_DAY)
         return LocalTime.ofSecondOfDay((normalizedMinutes * 60).toLong())
     }
@@ -297,7 +299,9 @@ class TravelMemoryAggregator(
     }
 
     private fun parseJsonFile(path: Path): List<TravelHistory> {
-        val content = Files.readString(path).trim()
+        val bytes = Files.readAllBytes(path)
+        if (bytes.isEmpty()) return emptyList()
+        val content = String(bytes, Charsets.UTF_8).trim()
         if (content.isEmpty()) return emptyList()
 
         val result = mutableListOf<TravelHistory>()
