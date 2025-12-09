@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">AIS Camera</string>
+    <string name="button_camera_one">相机1</string>
+    <string name="button_camera_two">相机2</string>
+    <string name="button_camera_three">相机3</string>
+    <string name="gallery_title">全部拍摄图片</string>
+    <string name="preview_placeholder">等待拍照...</string>
+    <string name="preview_content_description">最新拍摄的照片预览</string>
+    <string name="captured_item_content_description">%1$s 拍摄的缩略图</string>
+    <string name="countdown_pattern">%1$d</string>
+    <string name="countdown_placeholder">5</string>
+    <string name="timestamp_format">yyyy-MM-dd HH:mm:ss</string>
+    <string name="list_item_camera_label">来自 %1$s</string>
+    <string name="list_item_time_label">时间 %1$s</string>
+    <string name="empty_gallery_placeholder">暂无拍摄记录</string>
+</resources>
