@@ -4,10 +4,14 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.widget.SeekBar
 import androidx.activity.ComponentActivity
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
@@ -25,21 +29,67 @@ class VideoPlayerActivity : ComponentActivity() {
   private lateinit var binding: ActivityVideoPlayerBinding
   private var player: ExoPlayer? = null
 
+  private val mainHandler = Handler(Looper.getMainLooper())
+  private var userSeeking = false
+  private val progressUpdater = object : Runnable {
+    override fun run() {
+      updateProgressUi()
+      mainHandler.postDelayed(this, 500L)
+    }
+  }
+
+  private val playerListener = object : Player.Listener {
+    override fun onIsPlayingChanged(isPlaying: Boolean) {
+      updatePlayPauseUi(isPlaying)
+    }
+
+    override fun onPlaybackStateChanged(playbackState: Int) {
+      updateProgressUi()
+    }
+  }
+
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
     binding = ActivityVideoPlayerBinding.inflate(layoutInflater)
     setContentView(binding.root)
 
     enableImmersiveFullscreen()
+
+    binding.playPauseButton.setOnClickListener {
+      val p = player ?: return@setOnClickListener
+      if (p.isPlaying) p.pause() else p.play()
+      updatePlayPauseUi(p.isPlaying)
+    }
+
+    binding.progressSeekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+      override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
+        if (!fromUser) return
+        // Only seek on stopTracking to avoid spamming seeks.
+      }
+
+      override fun onStartTrackingTouch(seekBar: SeekBar) {
+        userSeeking = true
+      }
+
+      override fun onStopTrackingTouch(seekBar: SeekBar) {
+        val p = player ?: return
+        userSeeking = false
+        p.seekTo(seekBar.progress.toLong())
+        updateProgressUi()
+      }
+    })
   }
 
   override fun onStart() {
     super.onStart()
     initializePlayerIfNeeded()
+    mainHandler.removeCallbacks(progressUpdater)
+    mainHandler.post(progressUpdater)
   }
 
   override fun onStop() {
     super.onStop()
+    mainHandler.removeCallbacks(progressUpdater)
     releasePlayer()
   }
 
@@ -58,6 +108,7 @@ class VideoPlayerActivity : ComponentActivity() {
 
     binding.playerView.player = exoPlayer
     player = exoPlayer
+    exoPlayer.addListener(playerListener)
 
     val uri = intent.getParcelableExtra(EXTRA_VIDEO_URI, Uri::class.java)
       ?: defaultRawSampleUri()
@@ -68,10 +119,14 @@ class VideoPlayerActivity : ComponentActivity() {
         .build()
     )
     exoPlayer.prepare()
+
+    updatePlayPauseUi(exoPlayer.isPlaying)
+    updateProgressUi()
   }
 
   private fun releasePlayer() {
     binding.playerView.player = null
+    player?.removeListener(playerListener)
     player?.release()
     player = null
   }
@@ -89,6 +144,36 @@ class VideoPlayerActivity : ComponentActivity() {
       controller.systemBarsBehavior =
         WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
     }
+  }
+
+  private fun updatePlayPauseUi(isPlaying: Boolean) {
+    val iconRes = if (isPlaying) {
+      android.R.drawable.ic_media_pause
+    } else {
+      android.R.drawable.ic_media_play
+    }
+    binding.playPauseButton.setImageResource(iconRes)
+  }
+
+  private fun updateProgressUi() {
+    val p = player ?: return
+    val durationMs = p.duration
+    val positionMs = p.currentPosition
+
+    if (durationMs == C.TIME_UNSET || durationMs <= 0) {
+      binding.progressSeekBar.isEnabled = false
+      binding.progressSeekBar.max = 1000
+      if (!userSeeking) binding.progressSeekBar.progress = 0
+      return
+    }
+
+    binding.progressSeekBar.isEnabled = true
+    // duration is Long, SeekBar max is Int
+    val safeMax = durationMs.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+    val safeProgress = positionMs.coerceIn(0, durationMs).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+
+    if (binding.progressSeekBar.max != safeMax) binding.progressSeekBar.max = safeMax
+    if (!userSeeking) binding.progressSeekBar.progress = safeProgress
   }
 
   companion object {
