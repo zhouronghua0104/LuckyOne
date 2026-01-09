@@ -20,8 +20,12 @@ fun mergeSegmentsWithDebounce(
     @Suppress("UNUSED_PARAMETER")
     val _gapThreshold = gapThreshold
 
-    val negativeLabels = setOf("X", "其它", "其他")
-    fun isNegativeLabel(label: String): Boolean = label.isBlank() || label in negativeLabels
+    // 负例标签：需要“无条件过滤”，并做输入规范化避免漏判（空格/不可见字符/大小写等）
+    fun normalizeLabel(label: String): String = label.trim()
+    fun isNegativeLabel(label: String): Boolean {
+        val l = normalizeLabel(label)
+        return l.isEmpty() || l.equals("x", ignoreCase = true) || l == "其它" || l == "其他"
+    }
 
     // 1) 构建连续段：连续>=2个负例才切段；单个负例不切段
     val continuousSegments = mutableListOf<IntRange>()
@@ -82,9 +86,10 @@ fun mergeSegmentsWithDebounce(
     continuousSegments.forEach { range ->
         for (absIdx in range) {
             val label = predSequence[absIdx]
-            if (!isNegativeLabel(label)) {
+            val normalized = normalizeLabel(label)
+            if (!isNegativeLabel(normalized)) {
                 finalActionsWithPositions
-                    .getOrPut(label) { mutableListOf() }
+                    .getOrPut(normalized) { mutableListOf() }
                     .add(absIdx + 1)
             }
         }
