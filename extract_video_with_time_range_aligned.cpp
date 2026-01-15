@@ -99,7 +99,8 @@ static std::string extract_video_with_time_range(
   bool hw_enabled = false;
 
   int video_stream_index = -1;
-  int extracted_count = 0; // number of extracted timestamps (not tiles)
+  int output_seq = 0;      // output index used for file naming (stable, no gaps due to skip)
+  int saved_ok = 0;        // successfully saved outputs
 
   auto start_processing_time = std::chrono::high_resolution_clock::now();
 
@@ -301,16 +302,16 @@ static std::string extract_video_with_time_range(
         return 0;
       };
 
-      auto save_one = [&](AVFrame *to_save, double target_time) -> bool {
+      auto save_one = [&](AVFrame *to_save, double target_time, int out_index, const char *suffix) -> bool {
         int saved = save_cropped_tiles(to_save,
                                        output_dir.c_str(),
                                        target_time,
-                                       extracted_count,
+                                       out_index,
                                        crop_rows,
                                        crop_cols,
-                                       "");
+                                       suffix);
         if (saved > 0) {
-          extracted_count += 1;
+          saved_ok += 1;
           return true;
         }
         return false;
@@ -346,6 +347,22 @@ static std::string extract_video_with_time_range(
           std::swap(out_prev, out_cur);
           prev_time = cur_time;
           have_prev = true;
+
+          // Fallback: if targets are <= first decoded frame time, output using the first frame.
+          // This prevents "middle index misalignment" when seek lands after the first target time.
+          while (target_idx < (int) targets.size() && targets[target_idx] <= end_time + 1e-6) {
+            const double t = targets[target_idx];
+            if (t <= prev_time + 1e-6) {
+              const int out_index = output_seq++;
+              if (!save_one(out_prev, t, out_index, "")) {
+                // retry with fallback suffix for debugging
+                (void) save_one(out_prev, t, out_index, "_fallback");
+              }
+              target_idx++;
+              continue;
+            }
+            break;
+          }
           return;
         }
 
@@ -357,11 +374,17 @@ static std::string extract_video_with_time_range(
           return;
         }
 
-        // Emit targets that fall within (prev_time, cur_time] using "near" selection.
+        // Emit targets using "near" selection, and fallback for targets earlier than prev_time.
         while (target_idx < (int) targets.size() && targets[target_idx] <= end_time + 1e-6) {
           const double t = targets[target_idx];
+          const int out_index = output_seq++;
+
+          // If target is earlier than our current window start (can happen due to seek/ts jitter),
+          // fallback to prev frame (hold-first/hold-prev) instead of skipping.
           if (t + 1e-6 < prev_time) {
-            // target earlier than our current window; advance target.
+            if (!save_one(out_prev, t, out_index, "")) {
+              (void) save_one(out_prev, t, out_index, "_fallback");
+            }
             target_idx++;
             continue;
           }
@@ -371,7 +394,11 @@ static std::string extract_video_with_time_range(
           const double d_prev = std::fabs(t - prev_time);
           const double d_cur = std::fabs(cur_time - t);
           AVFrame *chosen = (d_cur < d_prev) ? out_cur : out_prev;
-          (void) save_one(chosen, t);
+          if (!save_one(chosen, t, out_index, "")) {
+            // Fallback: try the other neighbor frame.
+            AVFrame *alt = (chosen == out_prev) ? out_cur : out_prev;
+            (void) save_one(alt, t, out_index, "_fallback");
+          }
           target_idx++;
         }
 
@@ -419,7 +446,10 @@ static std::string extract_video_with_time_range(
         while (target_idx < (int) targets.size()) {
           const double t = targets[target_idx];
           if (t > end_time + 1e-6) break;
-          (void) save_one(out_prev, t);
+          const int out_index = output_seq++;
+          if (!save_one(out_prev, t, out_index, "")) {
+            (void) save_one(out_prev, t, out_index, "_fallback");
+          }
           target_idx++;
         }
       }
@@ -431,7 +461,7 @@ static std::string extract_video_with_time_range(
       result = "Frame extraction completed!\n";
       result += "Time range: " + std::to_string(start_time) + " - " + std::to_string(end_time) + " seconds\n";
       result += "Expected frames: " + std::to_string((int) targets.size()) + "\n";
-      result += "Frames extracted: " + std::to_string(extracted_count) + "\n";
+      result += "Frames saved: " + std::to_string(saved_ok) + "\n";
       result += "Processing time: " + std::to_string(elapsed_seconds) + " seconds\n";
       result += "Output directory: " + output_dir;
     }
@@ -441,7 +471,7 @@ static std::string extract_video_with_time_range(
     double elapsed_seconds = duration_ms.count() / 1000.0;
     result = "Error: Exception occurred during frame extraction\n";
     result += "Processing time before error: " + std::to_string(elapsed_seconds) + " seconds\n";
-    result += "Frames extracted before error: " + std::to_string(extracted_count);
+    result += "Frames saved before error: " + std::to_string(saved_ok);
   }
 
   cleanup_all();
