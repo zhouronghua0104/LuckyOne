@@ -64,6 +64,29 @@ static inline int64_t best_effort_ts(const AVFrame *f) {
   return ts;
 }
 
+static inline AVPixelFormat normalize_j_pix_fmt(AVPixelFormat fmt, int &is_full_range) {
+  // swscale warns for deprecated YUVJ* formats. Map them to YUV* and carry range separately.
+  switch (fmt) {
+    case AV_PIX_FMT_YUVJ420P: is_full_range = 1; return AV_PIX_FMT_YUV420P;
+    case AV_PIX_FMT_YUVJ422P: is_full_range = 1; return AV_PIX_FMT_YUV422P;
+    case AV_PIX_FMT_YUVJ444P: is_full_range = 1; return AV_PIX_FMT_YUV444P;
+    case AV_PIX_FMT_YUVJ440P: is_full_range = 1; return AV_PIX_FMT_YUV440P;
+    default: return fmt;
+  }
+}
+
+static inline const int *pick_sws_coeffs(AVColorSpace cs) {
+  // Minimal mapping for common color spaces; fall back to default.
+  switch (cs) {
+    case AVCOL_SPC_BT709:      return sws_getCoefficients(SWS_CS_ITU709);
+    case AVCOL_SPC_BT470BG:   return sws_getCoefficients(SWS_CS_ITU601);
+    case AVCOL_SPC_SMPTE170M: return sws_getCoefficients(SWS_CS_SMPTE170M);
+    case AVCOL_SPC_SMPTE240M: return sws_getCoefficients(SWS_CS_SMPTE240M);
+    case AVCOL_SPC_BT2020_NCL:return sws_getCoefficients(SWS_CS_BT2020);
+    default:                  return sws_getCoefficients(SWS_CS_DEFAULT);
+  }
+}
+
 /**
  * API 抽帧版本（对齐 ffmpeg CLI: -vf fps=3 的“时间轴取样 + 丢帧/复制帧”行为）
  *
@@ -110,11 +133,14 @@ static std::string extract_video_with_time_range(
   auto ensure_out_frame = [&](AVFrame *&dst, int w, int h) -> int {
     if (!dst) dst = av_frame_alloc();
     if (!dst) return AVERROR(ENOMEM);
-    if (dst->format != AV_PIX_FMT_YUVJ420P || dst->width != w || dst->height != h || !dst->buf[0]) {
+    // Use non-deprecated format; range is handled explicitly in swscale.
+    if (dst->format != AV_PIX_FMT_YUV420P || dst->width != w || dst->height != h || !dst->buf[0]) {
       av_frame_unref(dst);
-      dst->format = AV_PIX_FMT_YUVJ420P;
+      dst->format = AV_PIX_FMT_YUV420P;
       dst->width = w;
       dst->height = h;
+      // This output is typically encoded to JPEG; mark full range to avoid "range incorrect" issues downstream.
+      dst->color_range = AVCOL_RANGE_JPEG;
       int r = av_frame_get_buffer(dst, 32);
       if (r < 0) return r;
     }
@@ -289,13 +315,30 @@ static std::string extract_video_with_time_range(
       bool have_prev = false;
 
       auto convert_to_out = [&](AVFrame *src, AVFrame *&dst) -> int {
+        // Derive src range; if the decoder didn't fill it, infer from deprecated YUVJ* formats.
+        int src_full = (src->color_range == AVCOL_RANGE_JPEG) ? 1 : 0;
+        AVPixelFormat src_fmt = normalize_j_pix_fmt((AVPixelFormat) src->format, src_full);
+        const int src_range = src_full;
+        const int dst_range = 1; // full-range output for JPEG pipeline
+        const int *coeffs = pick_sws_coeffs(src->colorspace);
+
         sws_ctx = sws_getCachedContext(
                 sws_ctx,
-                src->width, src->height, (AVPixelFormat) src->format,
-                src->width, src->height, AV_PIX_FMT_YUVJ420P,
+                src->width, src->height, src_fmt,
+                src->width, src->height, AV_PIX_FMT_YUV420P,
                 SWS_BILINEAR, nullptr, nullptr, nullptr
         );
         if (!sws_ctx) return AVERROR(EINVAL);
+
+        // Explicitly set colorspace + range to avoid swscale "deprecated pixel format" warnings
+        // and to keep behavior closer to ffmpeg CLI (which tracks range through filter graph).
+        if (sws_setColorspaceDetails(sws_ctx,
+                                    coeffs, src_range,
+                                    coeffs, dst_range,
+                                    0, 1 << 16, 1 << 16) < 0) {
+          // Not fatal; continue with defaults.
+        }
+
         int eo = ensure_out_frame(dst, src->width, src->height);
         if (eo < 0) return eo;
         sws_scale(sws_ctx, src->data, src->linesize, 0, src->height, dst->data, dst->linesize);
