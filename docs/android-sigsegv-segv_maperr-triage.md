@@ -122,3 +122,63 @@ llvm-addr2line -C -f -e /path/to/libxxx.so 0x123456
 
 拿到这两段基本就能判断：崩溃发生在哪个 so、哪个函数附近，以及是否与 ABI/版本相关。
 
+---
+
+### 8) 针对 FFmpeg 抽帧崩溃（`avformat_find_stream_info`）的专项排查
+
+你补充的崩溃很典型：
+
+- `signal 11 ... fault addr 0x3c` / `Cause: null pointer dereference`
+- `#01 ... libavformat.so (avformat_find_stream_info+508)`
+- 由 JNI 入口 `Java_com_modelbest_ffmpeg_FFmpeg_extractFramesFromUriWithTimeRange` 触发
+
+这类崩溃的高概率根因不是“文件坏了”这么简单，而是**FFmpeg API 使用/错误处理不完整**或**自定义 IO 接入不规范**导致内部解引用空指针。
+
+#### 8.1 最优先检查：所有返回值都必须判断，失败就直接返回（不要继续走）
+
+最常见误用链路是：
+
+1. `avformat_alloc_context()` 返回空（内存不足等）但仍继续
+2. `avio_alloc_context()` / 自定义 read/seek 回调初始化失败，导致 `fmt->pb == NULL`
+3. `avformat_open_input()` 返回负值（打不开 URI/权限/IO 失败/回调不符合约定）但仍调用 `avformat_find_stream_info()`
+
+只要满足任意一种，“在 `find_stream_info` 里崩溃、fault addr 很小”就非常常见。
+
+#### 8.2 如果你是“从 Uri 读”（ContentResolver/自定义 read 回调），重点核对这些约定
+
+FFmpeg 的 read/seek 回调若实现不符合约定，会触发不可预期行为（包括崩溃）：
+
+- **read 回调**：
+  - 成功读取：返回 `>0`（实际字节数）
+  - 文件结束：返回 `AVERROR_EOF`
+  - 出错：返回负的 `AVERROR(errno)`（不要返回 0 表示“暂时没数据”，这在很多路径会被当成 EOF 或触发异常分支）
+- **seek 回调**（如果实现了）：
+  - 必须正确处理 `whence == AVSEEK_SIZE`（返回媒体大小，无法提供就返回负值）
+  - 返回值是新的绝对位置（字节偏移），失败返回负值
+- **线程安全**：
+  - `pool-*-thread-*` 里跑抽帧时，底层文件句柄/FD/Java InputStream 不要被其他线程关闭
+  - `jobject`（如 `InputStream`/`ParcelFileDescriptor`）跨线程使用必须转 **GlobalRef**，并保证生命周期覆盖 native 调用
+
+#### 8.3 版本/库一致性：确保 `libavformat/libavcodec/libavutil/...` 是同一套构建产物
+
+你 log 里显示 `libavformat.so` + 自己的 `libffmpeg_android.so`。
+
+- 如果 `libffmpeg_android.so` 里 **静态链接** 了部分 FFmpeg，同时 APK 又 **动态加载** 另一套 `libavformat.so`，可能出现符号/结构体布局不一致，导致空指针/越界。
+- 建议确认：最终运行时只使用**一套** FFmpeg（全静态或全动态），并且所有 FFmpeg so 的版本/配置一致。
+
+#### 8.4 快速自证：把 FFmpeg 日志打出来，定位卡在 open 还是 probe
+
+在 JNI 入口里尽早调用：
+
+- `av_log_set_level(AV_LOG_DEBUG)`（必要时 `AV_LOG_TRACE`）
+- `av_log_set_callback` 把日志转到 Android logcat
+
+然后关注 `avformat_open_input` 与 `avformat_find_stream_info` 前后的返回值与关键指针（`fmt != NULL`、`fmt->pb != NULL`）。
+
+#### 8.5 你这条堆栈下一步最需要的两样东西
+
+- **`libffmpeg_android.so` 的符号化 backtrace**（至少把 `#02 pc 0x24778` 与 `#03 pc 0x2803c` 映射到源码行）
+- `avformat_open_input` 的返回值、输入 URI 类型（`content://` / `file://` / `http(s)://`）、以及你是否使用自定义 `AVIOContext`
+
+做到这两点，基本就能把问题从“FFmpeg 崩了”收敛到“哪一个参数/回调/生命周期导致 `find_stream_info` 解引用空指针”。
+
