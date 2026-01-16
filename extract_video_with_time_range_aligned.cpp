@@ -299,20 +299,56 @@ static std::string extract_video_with_time_range(
            start_time, end_time, interval, (int) targets.size());
 
       // Seek once to start_time (stream time_base).
-      const int64_t seek_pts = seconds_to_stream_pts(start_time, time_base);
-      ret = av_seek_frame(fmt_ctx, video_stream_index, seek_pts, AVSEEK_FLAG_BACKWARD);
+      auto seek_and_flush = [&](double sec) -> int {
+        const int64_t pts = seconds_to_stream_pts(sec, time_base);
+        int r = av_seek_frame(fmt_ctx, video_stream_index, pts, AVSEEK_FLAG_BACKWARD);
+        if (r < 0) return r;
+        avcodec_flush_buffers(codec_ctx);
+        return 0;
+      };
+
+      ret = seek_and_flush(start_time);
       if (ret < 0) {
         result = "Error: av_seek_frame failed: " + ff_err(ret);
         cleanup_all();
         return result;
       }
-      avcodec_flush_buffers(codec_ctx);
 
       // Decode forward and pick frames on a continuous timeline.
       int target_idx = 0;
       double prev_time = NAN;
       double cur_time = NAN;
       bool have_prev = false;
+      bool did_runtime_fallback = false;
+
+      auto fallback_to_software = [&](double resume_sec) -> int {
+        // Runtime fallback: HW decoder opened successfully but failed during decode.
+        // Close HW decoder, open software decoder, then seek near the next target and continue.
+        LOGE("HW decode runtime failed -> fallback to software at %.3fs", resume_sec);
+
+        if (codec_ctx) avcodec_free_context(&codec_ctx);
+        if (hw.hw_device_ctx) av_buffer_unref(&hw.hw_device_ctx);
+        hw.hw_pix_fmt = AV_PIX_FMT_NONE;
+        hw_enabled = false;
+        codec = nullptr;
+
+        int r = open_software_decoder();
+        if (r < 0) return r;
+
+        // Re-seek to resume point to rebuild decoder state.
+        r = seek_and_flush(resume_sec);
+        if (r < 0) return r;
+
+        // Pixel format/range may differ after fallback.
+        if (sws_ctx) { sws_freeContext(sws_ctx); sws_ctx = nullptr; }
+
+        // Reset prev/cur window after seek so we don't mix old HW frames with SW frames.
+        have_prev = false;
+        prev_time = NAN;
+        cur_time = NAN;
+
+        return 0;
+      };
 
       auto convert_to_out = [&](AVFrame *src, AVFrame *&dst) -> int {
         // Derive src range; if the decoder didn't fill it, infer from deprecated YUVJ* formats.
@@ -450,21 +486,71 @@ static std::string extract_video_with_time_range(
         prev_time = cur_time;
       };
 
+      auto send_packet_with_drain = [&](AVPacket *pkt) -> int {
+        // Correct FFmpeg decode API usage: EAGAIN means "drain then retry", not a fatal error.
+        int r = avcodec_send_packet(codec_ctx, pkt);
+        if (r != AVERROR(EAGAIN)) return r;
+
+        while (true) {
+          int rr = avcodec_receive_frame(codec_ctx, frame);
+          if (rr == AVERROR(EAGAIN) || rr == AVERROR_EOF) break;
+          if (rr < 0) break;
+          // We don't want to emit frames here, only drain to unblock send.
+          av_frame_unref(frame);
+        }
+        return avcodec_send_packet(codec_ctx, pkt);
+      };
+
       // Normal decode loop.
+restart_decode:
       while ((ret = av_read_frame(fmt_ctx, packet)) >= 0) {
         if (packet->stream_index != video_stream_index) {
           av_packet_unref(packet);
           continue;
         }
 
-        ret = avcodec_send_packet(codec_ctx, packet);
+        ret = send_packet_with_drain(packet);
         av_packet_unref(packet);
-        if (ret < 0) continue;
+        if (ret < 0) {
+          // Runtime HW failure (e.g., MediaCodec). Try once to fallback to software.
+          if (hw_enabled && !use_soft_decode && !did_runtime_fallback) {
+            did_runtime_fallback = true;
+            const double resume_sec =
+                    (target_idx < (int) targets.size())
+                    ? std::max(start_time, targets[target_idx] - interval)
+                    : std::max(start_time, prev_time);
+            const int fr = fallback_to_software(resume_sec);
+            if (fr < 0) {
+              result = "Error: fallback to software decoder failed: " + ff_err(fr);
+              cleanup_all();
+              return result;
+            }
+            // Resume decoding from the new decoder + seek position.
+            goto restart_decode;
+          }
+          continue;
+        }
 
         while (true) {
           ret = avcodec_receive_frame(codec_ctx, frame);
           if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) break;
-          if (ret < 0) break;
+          if (ret < 0) {
+            if (hw_enabled && !use_soft_decode && !did_runtime_fallback) {
+              did_runtime_fallback = true;
+              const double resume_sec =
+                      (target_idx < (int) targets.size())
+                      ? std::max(start_time, targets[target_idx] - interval)
+                      : std::max(start_time, prev_time);
+              const int fr = fallback_to_software(resume_sec);
+              if (fr < 0) {
+                result = "Error: fallback to software decoder failed: " + ff_err(fr);
+                cleanup_all();
+                return result;
+              }
+              goto restart_decode;
+            }
+            break;
+          }
           process_decoded_frame(frame);
           av_frame_unref(frame);
 
@@ -478,7 +564,23 @@ static std::string extract_video_with_time_range(
       while (true) {
         ret = avcodec_receive_frame(codec_ctx, frame);
         if (ret == AVERROR_EOF || ret == AVERROR(EAGAIN)) break;
-        if (ret < 0) break;
+        if (ret < 0) {
+          if (hw_enabled && !use_soft_decode && !did_runtime_fallback) {
+            did_runtime_fallback = true;
+            const double resume_sec =
+                    (target_idx < (int) targets.size())
+                    ? std::max(start_time, targets[target_idx] - interval)
+                    : std::max(start_time, prev_time);
+            const int fr = fallback_to_software(resume_sec);
+            if (fr < 0) {
+              result = "Error: fallback to software decoder failed: " + ff_err(fr);
+              cleanup_all();
+              return result;
+            }
+            goto restart_decode;
+          }
+          break;
+        }
         process_decoded_frame(frame);
         av_frame_unref(frame);
         if (target_idx >= (int) targets.size()) break;
