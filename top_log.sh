@@ -5,7 +5,7 @@ set -euo pipefail
 # Runs until Ctrl+C is pressed.
 # Usage: ./top_log.sh [output_file]
 
-INTERVAL=1
+INTERVAL=0.5
 
 timestamp="$(date +%Y%m%d_%H%M%S)"
 log_file="${1:-top100_${timestamp}.log}"
