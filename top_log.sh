@@ -22,9 +22,13 @@ while true; do
 
   loop_end_ns="$(date +%s%N)"
   elapsed_ns=$((loop_end_ns - loop_start_ns))
-  if (( elapsed_ns < INTERVAL_NS )); then
-    remaining_ns=$((INTERVAL_NS - elapsed_ns))
-    sleep "$(printf '%d.%09d' $((remaining_ns / 1000000000)) \
-      $((remaining_ns % 1000000000)))"
+  if (( elapsed_ns < 0 )); then
+    elapsed_ns=0
+  fi
+  remaining_ns=$((INTERVAL_NS - elapsed_ns))
+  if (( remaining_ns > 0 )); then
+    seconds=$((remaining_ns / 1000000000))
+    nanos=$((remaining_ns % 1000000000))
+    sleep "$(printf '%d.%09d' "$seconds" "$nanos")"
   fi
 done
