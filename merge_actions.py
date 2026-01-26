@@ -62,7 +62,7 @@ def merge_sequence(seq):
     positions = {}
     order = []
     for idx, action in enumerate(seq, start=1):
-        if action == "X":
+        if action in {"X", "其他", "其它"}:
             continue
         if action not in positions:
             positions[action] = []
