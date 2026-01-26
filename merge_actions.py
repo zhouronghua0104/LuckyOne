@@ -117,7 +117,7 @@ def main():
                 except Exception as exc:
                     raise ValueError(f"failed to parse line {line_no}: {exc}") from exc
                 f_out.write(
-                    json.dumps(merged, ensure_ascii=True, separators=(",", ":"))
+                    json.dumps(merged, ensure_ascii=False, separators=(",", ":"))
                 )
                 f_out.write("\n")
     except Exception as exc:
