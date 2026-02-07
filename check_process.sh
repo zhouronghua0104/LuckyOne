@@ -14,8 +14,14 @@ if [ $# -gt 1 ]; then
   exit 1
 fi
 
-# 在此处配置要检测的包名/关键字（空格分隔）
-KEYWORDS="com.svw.appstore com.svw.appstore com.svw.dms com.svw.payment"
+# 在此处配置要检测的包名/关键字（换行分隔，每行一个）
+KEYWORDS="$(cat <<'EOF'
+com.svw.appstore
+com.svw.appstore
+com.svw.dms
+com.svw.payment
+EOF
+)"
 
 if [ $# -eq 1 ]; then
   OUT_FILE="$1"
@@ -29,7 +35,10 @@ if [ ! -d "$OUT_DIR" ]; then
   mkdir -p "$OUT_DIR"
 fi
 
-for KEYWORD in $KEYWORDS; do
+printf '%s\n' "$KEYWORDS" | while IFS= read -r KEYWORD; do
+  case "$KEYWORD" in
+    ""|\#*) continue ;;
+  esac
   NOW="$(date '+%Y-%m-%d %H:%M:%S')"
   # Use ps -ef as shown in the example, and filter out the grep process itself.
   MATCH_LINES="$(ps -ef | grep -F -e "$KEYWORD" | grep -v -e "grep")"
