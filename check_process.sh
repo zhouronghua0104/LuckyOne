@@ -6,6 +6,7 @@ set -u
 print_usage() {
   echo "用法: $0 [输出文件路径]"
   echo "示例: $0 /data/local/tmp/process_check.txt"
+  echo "不传参数则在当前目录生成默认文件名"
 }
 
 if [ $# -gt 1 ]; then
@@ -16,7 +17,12 @@ fi
 # 在此处配置要检测的包名/关键字（空格分隔）
 KEYWORDS="com.svw.appstore com.svw.appstore com.svw.dms com.svw.payment"
 
-OUT_FILE="${1:-/data/local/tmp/process_check.txt}"
+if [ $# -eq 1 ]; then
+  OUT_FILE="$1"
+else
+  DATE_TAG="$(date '+%Y%m%d_%H%M%S')"
+  OUT_FILE="./process_check_${DATE_TAG}.txt"
+fi
 
 OUT_DIR="$(dirname "$OUT_FILE")"
 if [ ! -d "$OUT_DIR" ]; then
