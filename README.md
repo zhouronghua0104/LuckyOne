@@ -22,7 +22,7 @@ Fix summary:
 
 File:
 
-- `app/src/main/java/com/crescent/myjnidemo/runtime/VendorNativeLibLoader.kt`
+- `app/src/main/java/com/crescent/myjnidemo/runtime/VendorNativeLibLoader.java`
 
 Fix summary:
 
