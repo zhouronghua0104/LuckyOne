@@ -4,6 +4,7 @@ import android.content.Context;
 import android.util.Log;
 
 import java.io.File;
+import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -48,19 +49,41 @@ public final class VendorNativeLibLoader {
     }
 
     public static synchronized boolean ensureLoaded() {
-        return ensureLoaded(null, Collections.emptyList());
+        return ensureLoaded(null, null, Collections.emptyList());
     }
 
     public static synchronized boolean ensureLoaded(Context context) {
-        return ensureLoaded(context, Collections.emptyList());
+        return ensureLoaded(context, null, Collections.emptyList());
+    }
+
+    /**
+     * Load runtime libraries with a user-specified library directory.
+     *
+     * <p>Order:
+     * 1) Append libPath to java.library.path
+     * 2) Call System.loadLibrary(...)
+     * 3) Fallback to absolute-path loading when needed
+     */
+    public static synchronized boolean ensureLoaded(Context context, String libPath) {
+        return ensureLoaded(context, libPath, Collections.emptyList());
     }
 
     public static synchronized boolean ensureLoaded(Context context, List<String> extraSearchDirs) {
+        return ensureLoaded(context, null, extraSearchDirs);
+    }
+
+    public static synchronized boolean ensureLoaded(
+            Context context, String libPath, List<String> extraSearchDirs) {
+        String normalizedLibPath = normalizeDir(libPath);
+        if (normalizedLibPath != null) {
+            appendToJavaLibraryPath(normalizedLibPath);
+        }
+
         if (INITIALIZED.get()) {
             return true;
         }
 
-        List<String> searchDirs = buildSearchDirs(context, extraSearchDirs);
+        List<String> searchDirs = buildSearchDirs(context, normalizedLibPath, extraSearchDirs);
         boolean success = true;
 
         for (String lib : PRELOAD_LIBRARIES) {
@@ -79,6 +102,34 @@ public final class VendorNativeLibLoader {
         return success;
     }
 
+    /**
+     * Appends a directory into java.library.path.
+     * Returns true when path is valid and appended/already present.
+     */
+    public static synchronized boolean appendToJavaLibraryPath(String libPath) {
+        String normalized = normalizeDir(libPath);
+        if (normalized == null) {
+            Log.w(TAG, "appendToJavaLibraryPath ignored: empty libPath");
+            return false;
+        }
+
+        String current = System.getProperty("java.library.path", "");
+        String separator = File.pathSeparator;
+        List<String> paths = splitPathList(current, separator);
+        if (paths.contains(normalized)) {
+            Log.i(TAG, "java.library.path already contains: " + normalized);
+            return true;
+        }
+
+        String updated = current == null || current.isEmpty()
+                ? normalized
+                : current + separator + normalized;
+        System.setProperty("java.library.path", updated);
+        resetClassLoaderPathCacheBestEffort();
+        Log.i(TAG, "java.library.path updated: " + updated);
+        return true;
+    }
+
     public static String dumpSearchReport() {
         return dumpSearchReport(null, Collections.emptyList());
     }
@@ -88,7 +139,7 @@ public final class VendorNativeLibLoader {
     }
 
     public static String dumpSearchReport(Context context, List<String> extraSearchDirs) {
-        List<String> dirs = buildSearchDirs(context, extraSearchDirs);
+        List<String> dirs = buildSearchDirs(context, null, extraSearchDirs);
         StringBuilder report = new StringBuilder();
         report.append("VendorNativeLibLoader search report\n");
         report.append("java.library.path=").append(System.getProperty("java.library.path")).append('\n');
@@ -101,7 +152,8 @@ public final class VendorNativeLibLoader {
         return report.toString();
     }
 
-    private static List<String> buildSearchDirs(Context context, List<String> extraSearchDirs) {
+    private static List<String> buildSearchDirs(
+            Context context, String preferredLibPath, List<String> extraSearchDirs) {
         LinkedHashSet<String> dirs = new LinkedHashSet<>();
 
         if (context != null
@@ -113,20 +165,59 @@ public final class VendorNativeLibLoader {
             }
         }
 
+        if (preferredLibPath != null) {
+            dirs.add(preferredLibPath);
+        }
+
         dirs.addAll(BUILTIN_SEARCH_DIRS);
 
         if (extraSearchDirs != null) {
             for (String dir : extraSearchDirs) {
-                if (dir == null) {
+                String normalized = normalizeDir(dir);
+                if (normalized == null) {
                     continue;
                 }
-                String trimmed = dir.trim();
-                if (!trimmed.isEmpty()) {
-                    dirs.add(trimmed);
-                }
+                dirs.add(normalized);
             }
         }
         return new ArrayList<>(dirs);
+    }
+
+    private static String normalizeDir(String dir) {
+        if (dir == null) {
+            return null;
+        }
+        String trimmed = dir.trim();
+        return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    private static List<String> splitPathList(String pathList, String separator) {
+        if (pathList == null || pathList.isEmpty()) {
+            return new ArrayList<>();
+        }
+        String[] split = pathList.split(java.util.regex.Pattern.quote(separator));
+        List<String> result = new ArrayList<>(split.length);
+        for (String item : split) {
+            String normalized = normalizeDir(item);
+            if (normalized != null) {
+                result.add(normalized);
+            }
+        }
+        return result;
+    }
+
+    private static void resetClassLoaderPathCacheBestEffort() {
+        // JVMs may cache java.library.path internally. On Android this may be a no-op.
+        String[] cacheFields = {"sys_paths", "usr_paths"};
+        for (String fieldName : cacheFields) {
+            try {
+                Field field = ClassLoader.class.getDeclaredField(fieldName);
+                field.setAccessible(true);
+                field.set(null, null);
+            } catch (Throwable ignore) {
+                // Ignore: field may not exist on Android ART.
+            }
+        }
     }
 
     private static boolean loadSingleLibrary(String libName, List<String> searchDirs) {

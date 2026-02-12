@@ -26,7 +26,8 @@ File:
 
 Fix summary:
 
-- Tries `System.loadLibrary(...)` first.
+- Supports appending user-specified `libPath` to `java.library.path`.
+- Calls `System.loadLibrary(...)` after path update.
 - Falls back to absolute-path `System.load(...)`.
 - Search paths include both new and old runtime folders.
 - Handles `opencv_java4` and `SmartCockpit` in deterministic order.
@@ -35,10 +36,32 @@ Fix summary:
 
 Call the loader before any static initialization path that may touch Ark/OpenCV:
 
-```kotlin
-val ok = VendorNativeLibLoader.ensureLoaded(applicationContext)
+```java
+String libPath = "/mnt/vendor/vr/llm_res/llm/libs"; // user-specified runtime lib path
+VendorNativeLibLoader.appendToJavaLibraryPath(libPath);
+
+try {
+    // Load OpenCV first
+    OpenCVLoader.initLocal();
+    System.out.println("OpenCV loaded successfully");
+} catch (Exception e) {
+    System.err.println("OpenCV failed to load: " + e);
+}
+
+try {
+    System.loadLibrary("SmartCockpit");
+} catch (UnsatisfiedLinkError e) {
+    System.err.println("Native code library failed to load. \n" + e);
+    System.err.println("java.library.path: " + System.getProperty("java.library.path"));
+}
+```
+
+Alternative one-shot call (includes fallback):
+
+```java
+boolean ok = VendorNativeLibLoader.ensureLoaded(getApplicationContext(), libPath);
 if (!ok) {
-    android.util.Log.e("Bootstrap", VendorNativeLibLoader.dumpSearchReport(applicationContext))
+    android.util.Log.e("Bootstrap", VendorNativeLibLoader.dumpSearchReport(getApplicationContext()));
 }
 ```
 
