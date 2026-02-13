@@ -1,10 +1,12 @@
 package com.crescent.myjnidemo.runtime;
 
 import android.content.Context;
+import android.os.Build;
 import android.util.Log;
 
 import java.io.File;
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -70,6 +72,43 @@ public final class VendorNativeLibLoader {
 
     public static synchronized boolean ensureLoaded(Context context, List<String> extraSearchDirs) {
         return ensureLoaded(context, null, extraSearchDirs);
+    }
+
+    /**
+     * OpenCV dedicated loading path for AAR/APK integration.
+     *
+     * <p>This method intentionally avoids requiring business libraries (e.g. SmartCockpit) so
+     * OpenCV-only integration can be validated independently.
+     */
+    public static synchronized boolean ensureOpenCvLoaded(Context context, String libPath) {
+        return ensureOpenCvLoaded(context, libPath, Collections.emptyList());
+    }
+
+    public static synchronized boolean ensureOpenCvLoaded(
+            Context context, String libPath, List<String> extraSearchDirs) {
+        String normalizedLibPath = normalizeDir(libPath);
+        if (normalizedLibPath != null) {
+            appendToJavaLibraryPath(normalizedLibPath);
+        }
+
+        List<String> searchDirs = buildSearchDirs(context, normalizedLibPath, extraSearchDirs);
+
+        // Preload C++ runtime first when available; OpenCV may depend on it.
+        loadSingleLibrary("c++_shared", searchDirs);
+
+        boolean opencvLoaded = loadSingleLibrary("opencv_java4", searchDirs);
+        if (!opencvLoaded) {
+            Log.e(TAG, "Failed to load opencv_java4. " + dumpOpenCvLoadReport(context, libPath, extraSearchDirs));
+            return false;
+        }
+
+        boolean initLocalOk = invokeOpenCvInitLocal();
+        if (!initLocalOk) {
+            Log.e(TAG, "OpenCVLoader.initLocal() returned false. "
+                    + dumpOpenCvLoadReport(context, libPath, extraSearchDirs));
+            return false;
+        }
+        return true;
     }
 
     public static synchronized boolean ensureLoaded(
@@ -149,6 +188,29 @@ public final class VendorNativeLibLoader {
                     .append(folder.exists() ? "EXISTS" : "MISSING")
                     .append('\n');
         }
+        return report.toString();
+    }
+
+    /**
+     * Generates a focused OpenCV report for troubleshooting AAR/APK native loading failures.
+     */
+    public static String dumpOpenCvLoadReport(Context context, String libPath) {
+        return dumpOpenCvLoadReport(context, libPath, Collections.emptyList());
+    }
+
+    public static String dumpOpenCvLoadReport(
+            Context context, String libPath, List<String> extraSearchDirs) {
+        String normalizedLibPath = normalizeDir(libPath);
+        List<String> dirs = buildSearchDirs(context, normalizedLibPath, extraSearchDirs);
+        StringBuilder report = new StringBuilder();
+        report.append("OpenCV load report\n");
+        report.append("java.library.path=").append(System.getProperty("java.library.path")).append('\n');
+        if (context != null && context.getApplicationInfo() != null) {
+            report.append("nativeLibraryDir=").append(context.getApplicationInfo().nativeLibraryDir).append('\n');
+        }
+        report.append("supportedAbis=").append(Arrays.toString(Build.SUPPORTED_ABIS)).append('\n');
+        appendLibraryCandidates(report, "opencv_java4", dirs);
+        appendLibraryCandidates(report, "c++_shared", dirs);
         return report.toString();
     }
 
@@ -250,5 +312,39 @@ public final class VendorNativeLibLoader {
 
         Log.e(TAG, "Failed to load " + libName + " from all search paths");
         return false;
+    }
+
+    private static boolean invokeOpenCvInitLocal() {
+        try {
+            Class<?> loaderClass = Class.forName("org.opencv.android.OpenCVLoader");
+            Method initLocal = loaderClass.getMethod("initLocal");
+            Object result = initLocal.invoke(null);
+            if (result instanceof Boolean) {
+                return (Boolean) result;
+            }
+            // Defensive fallback: if method signature changes and returns void/non-boolean.
+            return true;
+        } catch (ClassNotFoundException e) {
+            Log.e(TAG, "OpenCVLoader class not found. Ensure opencv.jar is on classpath.", e);
+            return false;
+        } catch (NoSuchMethodException e) {
+            Log.e(TAG, "OpenCVLoader.initLocal() not found. Check OpenCV SDK version.", e);
+            return false;
+        } catch (Throwable t) {
+            Log.e(TAG, "OpenCVLoader.initLocal invocation failed.", t);
+            return false;
+        }
+    }
+
+    private static void appendLibraryCandidates(
+            StringBuilder report, String libName, List<String> searchDirs) {
+        String fileName = "lib" + libName + ".so";
+        report.append("candidates for ").append(fileName).append('\n');
+        for (String dir : searchDirs) {
+            File candidate = new File(dir, fileName);
+            report.append(" - ").append(candidate.getAbsolutePath()).append(" : ")
+                    .append(candidate.exists() ? "EXISTS" : "MISSING")
+                    .append('\n');
+        }
     }
 }

@@ -40,12 +40,11 @@ Call the loader before any static initialization path that may touch Ark/OpenCV:
 String libPath = "/mnt/vendor/vr/llm_res/llm/libs"; // user-specified runtime lib path
 VendorNativeLibLoader.appendToJavaLibraryPath(libPath);
 
-try {
-    // Load OpenCV first
-    OpenCVLoader.initLocal();
+boolean openCvOk = OpenCVLoader.initLocal();
+if (openCvOk) {
     System.out.println("OpenCV loaded successfully");
-} catch (Exception e) {
-    System.err.println("OpenCV failed to load: " + e);
+} else {
+    System.err.println("OpenCV initLocal returned false");
 }
 
 try {
@@ -70,3 +69,39 @@ Important:
 - Avoid loading Ark/OpenCV from `companion object` static initializers.
 - Prefer runtime initialization in `Application.onCreate()` or first Activity
   startup path to ensure fallback logic runs first.
+
+## OpenCV AAR integration checklist (for "cannot find opencv_java4")
+
+If your AAR already contains `opencv.jar` and `libopencv_java4.so` but runtime still
+reports "library opencv_java4 not found", verify the following:
+
+1. **AAR native layout is ABI-scoped**
+   - `src/main/jniLibs/arm64-v8a/libopencv_java4.so`
+   - `src/main/jniLibs/armeabi-v7a/libopencv_java4.so`
+   - Include `libc++_shared.so` for the same ABIs (OpenCV often depends on it).
+2. **APK ABI filters are compatible with bundled .so files**
+   - If APK only builds `arm64-v8a`, but AAR only ships `armeabi-v7a`, load will fail.
+3. **Do not rely on static initializer to verify success**
+   - `OpenCVLoader.initLocal()` returns `boolean`; it does not guarantee an exception.
+4. **Catch `UnsatisfiedLinkError`/`Throwable`, not just `Exception`**
+   - Native load failures are `Error` subclasses.
+
+Recommended runtime initialization:
+
+```java
+String libPath = "/mnt/vendor/vr/llm_res/llm/libs"; // optional external path
+boolean loaded = VendorNativeLibLoader.ensureOpenCvLoaded(getApplicationContext(), libPath);
+if (!loaded) {
+    Log.e("Bootstrap", VendorNativeLibLoader.dumpOpenCvLoadReport(
+            getApplicationContext(), libPath));
+}
+```
+
+If you still need direct OpenCV API call, always check return value:
+
+```java
+boolean ok = OpenCVLoader.initLocal();
+if (!ok) {
+    Log.e("Bootstrap", "OpenCV initLocal failed");
+}
+```
