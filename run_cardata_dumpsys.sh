@@ -10,6 +10,8 @@ on_interrupt() {
 trap on_interrupt INT TERM
 
 while true; do
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')]"
   dumpsys activity service com.svw.modelservice/.ModelService cardata all
+  echo ""
   sleep 1
 done
