@@ -27,7 +27,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "读取 JSON 测试集中的 intent，逐条执行:\n"
-            "dumpsys activity service "
+            "adb shell dumpsys activity service "
             "com.svw.modelservice/.ModelService inference maptest [intent]"
         )
     )
@@ -65,6 +65,8 @@ def load_intents(json_file: Path) -> list[str]:
 
 def run_one_inference(intent: str) -> int:
     command = [
+        "adb",
+        "shell",
         "dumpsys",
         "activity",
         "service",
@@ -76,7 +78,7 @@ def run_one_inference(intent: str) -> int:
     try:
         completed = subprocess.run(command, check=False)
     except OSError as exc:
-        error(f"执行 dumpsys 失败: {exc}")
+        error(f"执行 adb 失败: {exc}")
         return 1
     return completed.returncode
 
@@ -89,8 +91,8 @@ def main() -> int:
         error(f"错误: 文件不存在: {json_file}")
         return 1
 
-    if shutil.which("dumpsys") is None:
-        error("错误: 未检测到 dumpsys，请在安卓设备环境中运行此脚本。")
+    if shutil.which("adb") is None:
+        error("错误: 未检测到 adb，请先安装 Android platform-tools。")
         return 1
 
     if args.sleep_seconds < 0:
