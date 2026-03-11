@@ -13,7 +13,7 @@ OUT_DIR="."
 usage() {
   echo "用法: sh energy_collect.sh [-i 间隔秒] [-n 采集次数] [-o 输出目录]"
   echo "  -i 采样间隔(秒)，默认 1"
-  echo "  -n 采集次数，默认 0(无限循环，Ctrl+C 结束)"
+  echo "  -n 采集次数，默认 0(仅支持 Ctrl+C 手动结束)"
   echo "  -o 日志输出目录，默认当前目录"
 }
 
@@ -78,16 +78,26 @@ extract_field() {
   echo "$1" | awk -F': ' -v k="$2" '$1==k{print $2; exit}'
 }
 
-on_exit() {
+STOP_REASON="未设置"
+
+finish() {
   echo "# energy collect stop: $(date '+%F %T')" >> "$LOG_FILE"
-  echo "采集结束，日志文件: $LOG_FILE"
+  echo "# stop_reason: ${STOP_REASON}" >> "$LOG_FILE"
+  echo "采集结束(${STOP_REASON})，日志文件: $LOG_FILE"
 }
 
-trap on_exit INT TERM EXIT
+on_ctrl_c() {
+  STOP_REASON="Ctrl+C"
+  finish
+  exit 130
+}
+
+trap on_ctrl_c INT
 
 i=0
 while :; do
   if [ "$COUNT" -gt 0 ] && [ "$i" -ge "$COUNT" ]; then
+    STOP_REASON="达到N次采集(${COUNT})"
     break
   fi
 
@@ -114,3 +124,8 @@ while :; do
   i=$((i + 1))
   sleep "$INTERVAL"
 done
+
+if [ "$STOP_REASON" = "未设置" ]; then
+  STOP_REASON="脚本正常结束"
+fi
+finish
