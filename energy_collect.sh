@@ -77,21 +77,8 @@ log_line() {
 log_line "# energy collect start: $(date '+%F %T')"
 log_line "# interval=${INTERVAL}s, count=${COUNT}"
 log_line "# command: ${SERVICE_CMD}"
-log_line "# format: time|battery_percent|remaining_range|battery_voltage"
+log_line "# format: sample_time + raw service output"
 log_line ""
-
-extract_field() {
-  # $1: service output content
-  # $2: field key, e.g. "电池百分比"
-  echo "$1" | awk -v k="$2" '
-    index($0, k) > 0 {
-      line = $0
-      sub(/^[^:]*:[[:space:]]*/, "", line)
-      print line
-      exit
-    }
-  '
-}
 
 STOP_REASON="未设置"
 
@@ -119,15 +106,7 @@ while :; do
   DUMP="$(dumpsys activity service com.svw.modelservice/.ModelService cardata battery 2>&1)"
   NOW="$(date '+%F %T')"
 
-  BATTERY_PERCENT="$(extract_field "$DUMP" "电池百分比")"
-  REMAINING_RANGE="$(extract_field "$DUMP" "剩余续航里程")"
-  BATTERY_VOLTAGE="$(extract_field "$DUMP" "电池电压")"
-
-  [ -z "$BATTERY_PERCENT" ] && BATTERY_PERCENT="NA"
-  [ -z "$REMAINING_RANGE" ] && REMAINING_RANGE="NA"
-  [ -z "$BATTERY_VOLTAGE" ] && BATTERY_VOLTAGE="NA"
-
-  log_line "${NOW}|${BATTERY_PERCENT}|${REMAINING_RANGE}|${BATTERY_VOLTAGE}"
+  log_line "${NOW}"
   log_line "----- raw begin ${NOW} -----"
   printf '%s\n' "$DUMP" | tee -a "$LOG_FILE"
   log_line "----- raw end ${NOW} -----"
