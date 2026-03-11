@@ -69,10 +69,16 @@ TIMESTAMP="$(date '+%Y%m%d_%H%M%S')"
 LOG_FILE="${OUT_DIR%/}/energy_${TIMESTAMP}.log"
 SERVICE_CMD="dumpsys activity service com.svw.modelservice/.ModelService cardata battery"
 
-echo "# energy collect start: $(date '+%F %T')" > "$LOG_FILE"
-echo "# interval=${INTERVAL}s, count=${COUNT}" >> "$LOG_FILE"
-echo "# command: ${SERVICE_CMD}" >> "$LOG_FILE"
-echo "# format: time|battery_percent|remaining_range|battery_voltage" >> "$LOG_FILE"
+log_line() {
+  printf '%s\n' "$1" | tee -a "$LOG_FILE"
+}
+
+: > "$LOG_FILE"
+log_line "# energy collect start: $(date '+%F %T')"
+log_line "# interval=${INTERVAL}s, count=${COUNT}"
+log_line "# command: ${SERVICE_CMD}"
+log_line "# format: time|battery_percent|remaining_range|battery_voltage"
+log_line ""
 
 extract_field() {
   # $1: service output content
@@ -90,8 +96,8 @@ extract_field() {
 STOP_REASON="未设置"
 
 finish() {
-  echo "# energy collect stop: $(date '+%F %T')" >> "$LOG_FILE"
-  echo "# stop_reason: ${STOP_REASON}" >> "$LOG_FILE"
+  log_line "# energy collect stop: $(date '+%F %T')"
+  log_line "# stop_reason: ${STOP_REASON}"
   echo "采集结束(${STOP_REASON})，日志文件: $LOG_FILE"
 }
 
@@ -121,10 +127,11 @@ while :; do
   [ -z "$REMAINING_RANGE" ] && REMAINING_RANGE="NA"
   [ -z "$BATTERY_VOLTAGE" ] && BATTERY_VOLTAGE="NA"
 
-  echo "${NOW}|${BATTERY_PERCENT}|${REMAINING_RANGE}|${BATTERY_VOLTAGE}" >> "$LOG_FILE"
-  echo "----- raw begin ${NOW} -----" >> "$LOG_FILE"
-  echo "$DUMP" >> "$LOG_FILE"
-  echo "----- raw end ${NOW} -----" >> "$LOG_FILE"
+  log_line "${NOW}|${BATTERY_PERCENT}|${REMAINING_RANGE}|${BATTERY_VOLTAGE}"
+  log_line "----- raw begin ${NOW} -----"
+  printf '%s\n' "$DUMP" | tee -a "$LOG_FILE"
+  log_line "----- raw end ${NOW} -----"
+  log_line ""
 
   i=$((i + 1))
   sleep "$INTERVAL"
