@@ -1,6 +1,6 @@
 #!/system/bin/sh
 
-# Android battery energy collector
+# Android car battery energy collector
 # Usage:
 #   sh energy_collect.sh -i 1
 #   sh energy_collect.sh -i 10 -n 60
@@ -13,7 +13,7 @@ OUT_DIR="."
 usage() {
   echo "用法: sh energy_collect.sh [-i 间隔秒] [-n 采集次数] [-o 输出目录]"
   echo "  -i 采样间隔(秒)，默认 1"
-  echo "  -n 采集次数，默认 0(仅支持 Ctrl+C 手动结束)"
+  echo "  -n 采集次数，默认 0(无限循环，按 Ctrl+C 手动结束)"
   echo "  -o 日志输出目录，默认当前目录"
 }
 
@@ -67,15 +67,24 @@ fi
 
 TIMESTAMP="$(date '+%Y%m%d_%H%M%S')"
 LOG_FILE="${OUT_DIR%/}/energy_${TIMESTAMP}.log"
+SERVICE_CMD="dumpsys activity service com.svw.modelservice/.ModelService cardata battery"
 
 echo "# energy collect start: $(date '+%F %T')" > "$LOG_FILE"
 echo "# interval=${INTERVAL}s, count=${COUNT}" >> "$LOG_FILE"
-echo "# format: time|AC|USB|WIRELESS|max_current|max_voltage|charge_counter|status|health|present|level|scale|voltage|temperature|technology" >> "$LOG_FILE"
+echo "# command: ${SERVICE_CMD}" >> "$LOG_FILE"
+echo "# format: time|battery_percent|remaining_range|battery_voltage" >> "$LOG_FILE"
 
 extract_field() {
-  # $1: dumpsys battery content
-  # $2: field key with leading spaces, e.g. "  level"
-  echo "$1" | awk -F': ' -v k="$2" '$1==k{print $2; exit}'
+  # $1: service output content
+  # $2: field key, e.g. "电池百分比"
+  echo "$1" | awk -v k="$2" '
+    index($0, k) > 0 {
+      line = $0
+      sub(/^[^:]*:[[:space:]]*/, "", line)
+      print line
+      exit
+    }
+  '
 }
 
 STOP_REASON="未设置"
@@ -101,25 +110,21 @@ while :; do
     break
   fi
 
-  DUMP="$(dumpsys battery)"
+  DUMP="$(dumpsys activity service com.svw.modelservice/.ModelService cardata battery 2>&1)"
   NOW="$(date '+%F %T')"
 
-  AC="$(extract_field "$DUMP" "  AC powered")"
-  USB="$(extract_field "$DUMP" "  USB powered")"
-  WIRELESS="$(extract_field "$DUMP" "  Wireless powered")"
-  MAX_CURRENT="$(extract_field "$DUMP" "  Max charging current")"
-  MAX_VOLTAGE="$(extract_field "$DUMP" "  Max charging voltage")"
-  CHARGE_COUNTER="$(extract_field "$DUMP" "  Charge counter")"
-  STATUS="$(extract_field "$DUMP" "  status")"
-  HEALTH="$(extract_field "$DUMP" "  health")"
-  PRESENT="$(extract_field "$DUMP" "  present")"
-  LEVEL="$(extract_field "$DUMP" "  level")"
-  SCALE="$(extract_field "$DUMP" "  scale")"
-  VOLTAGE="$(extract_field "$DUMP" "  voltage")"
-  TEMPERATURE="$(extract_field "$DUMP" "  temperature")"
-  TECHNOLOGY="$(extract_field "$DUMP" "  technology")"
+  BATTERY_PERCENT="$(extract_field "$DUMP" "电池百分比")"
+  REMAINING_RANGE="$(extract_field "$DUMP" "剩余续航里程")"
+  BATTERY_VOLTAGE="$(extract_field "$DUMP" "电池电压")"
 
-  echo "${NOW}|${AC}|${USB}|${WIRELESS}|${MAX_CURRENT}|${MAX_VOLTAGE}|${CHARGE_COUNTER}|${STATUS}|${HEALTH}|${PRESENT}|${LEVEL}|${SCALE}|${VOLTAGE}|${TEMPERATURE}|${TECHNOLOGY}" >> "$LOG_FILE"
+  [ -z "$BATTERY_PERCENT" ] && BATTERY_PERCENT="NA"
+  [ -z "$REMAINING_RANGE" ] && REMAINING_RANGE="NA"
+  [ -z "$BATTERY_VOLTAGE" ] && BATTERY_VOLTAGE="NA"
+
+  echo "${NOW}|${BATTERY_PERCENT}|${REMAINING_RANGE}|${BATTERY_VOLTAGE}" >> "$LOG_FILE"
+  echo "----- raw begin ${NOW} -----" >> "$LOG_FILE"
+  echo "$DUMP" >> "$LOG_FILE"
+  echo "----- raw end ${NOW} -----" >> "$LOG_FILE"
 
   i=$((i + 1))
   sleep "$INTERVAL"
